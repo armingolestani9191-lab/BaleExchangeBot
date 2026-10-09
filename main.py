@@ -3,7 +3,7 @@ import time
 import threading
 import requests
 
-from config import BOT_TOKEN
+from config import BOT_TOKEN, ADMIN_ID
 from database import init_db, get_connection
 from features import views, members, guaranteed_members
 
@@ -127,6 +127,102 @@ def register_user(user):
         )
 
 
+def admin_give_coins(text, admin_id, chat_id, send_message):
+    """دادن سکه فقط توسط ادمین."""
+
+    # فقط ادمین اصلی اجازه استفاده دارد.
+    try:
+        if int(admin_id) != int(ADMIN_ID):
+            return False
+    except (TypeError, ValueError):
+        return False
+
+    import re
+
+    match = re.fullmatch(
+        r"(\d+)\s+(@?[A-Za-z0-9_]{1,64}|\d+)",
+        text.strip()
+    )
+
+    if not match:
+        return False
+
+    amount = int(match.group(1))
+    target = match.group(2)
+
+    if amount <= 0 or amount > 1_000_000_000:
+        send_message(
+            chat_id,
+            "❌ تعداد سکه باید بین ۱ تا یک میلیارد باشد."
+        )
+        return True
+
+    with get_connection() as conn:
+        # اگر ورودی عددی باشد، آن را آیدی کاربر در نظر می‌گیریم.
+        if target.isdigit():
+            target_id = int(target)
+
+            if target_id <= 0:
+                send_message(
+                    chat_id,
+                    "❌ آیدی عددی نامعتبر است."
+                )
+                return True
+
+            conn.execute(
+                """
+                INSERT INTO users (user_id, coins)
+                VALUES (?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    coins = users.coins + excluded.coins
+                """,
+                (target_id, amount)
+            )
+
+        else:
+            username = target.lstrip("@")
+
+            row = conn.execute(
+                """
+                SELECT user_id
+                FROM users
+                WHERE LOWER(REPLACE(username, '@', '')) = LOWER(?)
+                LIMIT 1
+                """,
+                (username,)
+            ).fetchone()
+
+            if not row:
+                send_message(
+                    chat_id,
+                    "❌ این یوزرنیم در دیتابیس ربات پیدا نشد.\n"
+                    "از آیدی عددی کاربر استفاده کن."
+                )
+                return True
+
+            target_id = row["user_id"]
+
+            conn.execute(
+                "UPDATE users SET coins = coins + ? WHERE user_id = ?",
+                (amount, target_id)
+            )
+
+        balance = conn.execute(
+            "SELECT coins FROM users WHERE user_id = ?",
+            (target_id,)
+        ).fetchone()["coins"]
+
+    send_message(
+        chat_id,
+        "✅ سکه‌ها با موفقیت اضافه شدند.\n\n"
+        f"👤 آیدی کاربر: {target_id}\n"
+        f"🪙 سکه اضافه‌شده: {amount}\n"
+        f"💰 موجودی جدید: {balance}"
+    )
+
+    return True
+
+
 def clear_all_states(user_id):
     """پاک کردن مراحل فعال سفارش‌ها."""
     views.clear_state(user_id)
@@ -147,6 +243,10 @@ def handle_message(message):
         return
 
     register_user(user)
+
+    # قابلیت جدید: دادن سکه فقط توسط ادمین
+    if admin_give_coins(text, user_id, chat_id, send_message):
+        return
 
     if text in ("/start", "شروع"):
         clear_all_states(user_id)
