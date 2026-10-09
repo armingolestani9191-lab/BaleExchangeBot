@@ -1,3 +1,4 @@
+
 import json
 
 from database import get_connection
@@ -314,12 +315,12 @@ def handle_message(message, api, send_message):
             )
             return True
 
-        # پیام دکمه‌ها را به خود پست کانال ریپلای می‌کنیم
+        # متن جدید سفارش؛ منطق سفارش تغییر نکرده
         info_text = (
-            f"👁️ سفارش سین #{order_id}\n\n"
-            f"📊 سین‌های ثبت‌شده: 0 از {target_count}\n"
-            "💰 پاداش هر کلیک یکتا: ۱ سکه\n\n"
-            "اگه این پست رو دیدی، روی دکمهٔ زیر بزن."
+            f"📋 **سفارش سین**\n\n"
+            f"👤 سین درخواستی: {target_count}\n"
+            f"👁️ سین خورده: 0\n"
+            f"#{order_id}"
         )
 
         info_result = api(
@@ -559,12 +560,12 @@ def handle_callback_query(callback, api, send_message):
             )
 
         else:
-            # به‌روزرسانی تعداد کلیک‌های ثبت‌شده
+            # متن جدید پس از هر کلیک یکتا
             new_info_text = (
-                f"👁️ سفارش سین #{order_id}\n\n"
-                f"📊 سین‌های ثبت‌شده: {new_count} از {target_count}\n"
-                "💰 پاداش هر کلیک یکتا: ۱ سکه\n\n"
-                "اگه این پست رو دیدی، روی دکمهٔ زیر بزن."
+                f"📋 **سفارش سین**\n\n"
+                f"👤 سین درخواستی: {target_count}\n"
+                f"👁️ سین خورده: {new_count}\n"
+                f"#{order_id}"
             )
 
             if info_message_id:
@@ -657,5 +658,3 @@ def handle_callback_query(callback, api, send_message):
             )
 
         return True
-
-    return False
