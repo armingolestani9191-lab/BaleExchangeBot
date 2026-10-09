@@ -5,7 +5,12 @@ import requests
 
 from config import BOT_TOKEN, ADMIN_ID
 from database import init_db, get_connection
-from features import views, members, guaranteed_members
+from features import (
+    views,
+    members,
+    guaranteed_members,
+    daily_rewards,
+)
 
 
 API_URL = f"https://tapi.bale.ai/bot{BOT_TOKEN}/"
@@ -90,6 +95,10 @@ def main_menu():
             [
                 {"text": "🛒 سفارش سین"},
                 {"text": "💰 کیف پول"}
+            ],
+            [
+                {"text": "🎰 چرخونه روزانه"},
+                {"text": "🎁 هدیه روزانه"}
             ],
             [
                 {"text": "👥 ممبر معمولی"},
@@ -244,8 +253,17 @@ def handle_message(message):
 
     register_user(user)
 
-    # قابلیت جدید: دادن سکه فقط توسط ادمین
+    # قابلیت دادن سکه فقط توسط ادمین
     if admin_give_coins(text, user_id, chat_id, send_message):
+        return
+
+    # چرخونه و هدیه روزانه
+    if daily_rewards.handle_message(
+        text,
+        user_id,
+        chat_id,
+        send_message
+    ):
         return
 
     if text in ("/start", "شروع"):
@@ -332,7 +350,9 @@ def handle_message(message):
             "🛒 سفارش سین: ثبت سفارش سین\n"
             "👥 ممبر معمولی: هر ممبر ۵ سکه\n"
             "🛡️ ممبر تضمینی: هر ممبر ۱۰ سکه\n"
-            "💰 کیف پول: مشاهده موجودی سکه‌ها\n\n"
+            "💰 کیف پول: مشاهده موجودی سکه‌ها\n"
+            "🎰 چرخونه روزانه: جایزه تصادفی ۱ تا ۵۰ سکه، روزی یک‌بار\n"
+            "🎁 هدیه روزانه: جایزه تصادفی ۱۰ تا ۲۵ سکه، روزی یک‌بار\n\n"
             "🎁 پاداش ممبر معمولی: ۳ سکه\n"
             "🎁 اولین پاداش ممبر تضمینی: ۲۵ سکه\n"
             "🎁 پاداش ممبرهای بعدی تضمینی: ۳ سکه\n"
@@ -425,6 +445,7 @@ def main():
     views.init_views_db()
     members.init_members_db()
     guaranteed_members.init_guaranteed_db()
+    daily_rewards.init_daily_rewards_db()
 
     print("Database initialized.")
 
