@@ -1,11 +1,20 @@
 
+import os
 import sqlite3
+
 from config import DB_PATH
 
 
 def get_connection():
+    # مسیر کامل دیتابیس
+    db_path = os.path.abspath(DB_PATH)
+    db_dir = os.path.dirname(db_path)
+
+    # ایجاد پوشه در صورت نبودن آن
+    os.makedirs(db_dir, exist_ok=True)
+
     conn = sqlite3.connect(
-        DB_PATH,
+        db_path,
         timeout=30,
         isolation_level="DEFERRED"
     )
@@ -15,7 +24,7 @@ def get_connection():
     # فعال‌سازی کلیدهای خارجی
     conn.execute("PRAGMA foreign_keys = ON")
 
-    # صبر برای آزاد شدن قفل دیتابیس
+    # انتظار برای آزاد شدن قفل دیتابیس
     conn.execute("PRAGMA busy_timeout = 30000")
 
     return conn
@@ -99,4 +108,4 @@ def init_db():
 if __name__ == "__main__":
     init_db()
     print("Database initialized successfully!")
-    print("Database path:", DB_PATH)
+    print("Database path:", os.path.abspath(DB_PATH))
