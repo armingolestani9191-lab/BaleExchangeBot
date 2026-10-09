@@ -9,7 +9,7 @@ import os
 BOT_TOKEN = "1200170625:YgLV45DlcFz7_S664RIp0jIoSe-sDCe-3kA"
 
 # شناسه عددی ادمین
-ADMIN_ID = 123456789
+ADMIN_ID = 595450272
 
 # کانال انتشار سفارش‌ها
 ORDER_CHANNEL = "@djbdbdhddhdb"
