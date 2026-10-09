@@ -10,6 +10,7 @@ from features import (
     members,
     guaranteed_members,
     daily_rewards,
+    force_join,
 )
 
 
@@ -88,6 +89,19 @@ def send_message(chat_id, text, keyboard=None):
     return api("sendMessage", data)
 
 
+def answer_callback(callback_id, text=None, show_alert=False):
+    """پاسخ به کلیک دکمه شیشه‌ای."""
+    data = {"callback_query_id": callback_id}
+
+    if text:
+        data["text"] = text
+
+    if show_alert:
+        data["show_alert"] = True
+
+    return api("answerCallbackQuery", data)
+
+
 def main_menu():
     """منوی اصلی ربات."""
     return {
@@ -138,8 +152,6 @@ def register_user(user):
 
 def admin_give_coins(text, admin_id, chat_id, send_message):
     """دادن سکه فقط توسط ادمین."""
-
-    # فقط ادمین اصلی اجازه استفاده دارد.
     try:
         if int(admin_id) != int(ADMIN_ID):
             return False
@@ -167,15 +179,11 @@ def admin_give_coins(text, admin_id, chat_id, send_message):
         return True
 
     with get_connection() as conn:
-        # اگر ورودی عددی باشد، آن را آیدی کاربر در نظر می‌گیریم.
         if target.isdigit():
             target_id = int(target)
 
             if target_id <= 0:
-                send_message(
-                    chat_id,
-                    "❌ آیدی عددی نامعتبر است."
-                )
+                send_message(chat_id, "❌ آیدی عددی نامعتبر است.")
                 return True
 
             conn.execute(
@@ -253,9 +261,36 @@ def handle_message(message):
 
     register_user(user)
 
+    # دستورات مدیریت جوین اجباری فقط برای ادمین اصلی.
+    if force_join.handle_admin_command(
+        text,
+        user_id,
+        chat_id,
+        ADMIN_ID,
+        api,
+        send_message
+    ):
+        return
+
     # قابلیت دادن سکه فقط توسط ادمین
     if admin_give_coins(text, user_id, chat_id, send_message):
         return
+
+    # بررسی جوین اجباری برای تمام قابلیت‌های ربات.
+    # ادمین اصلی برای مدیریت و تست مسدود نمی‌شود.
+    try:
+        is_main_admin = int(user_id) == int(ADMIN_ID)
+    except (TypeError, ValueError):
+        is_main_admin = False
+
+    if not is_main_admin:
+        if not force_join.check_access(
+            user_id,
+            chat_id,
+            api,
+            send_message
+        ):
+            return
 
     # چرخونه و هدیه روزانه
     if daily_rewards.handle_message(
@@ -364,6 +399,45 @@ def handle_message(message):
 
 def handle_callback(callback):
     """مدیریت دکمه‌های شیشه‌ای."""
+    # دکمه بررسی عضویت همیشه باید قابل استفاده باشد.
+    if force_join.handle_callback(
+        callback,
+        api,
+        send_message,
+        answer_callback
+    ):
+        return
+
+    user_id = callback.get("from", {}).get("id")
+    message = callback.get("message", {})
+    chat_id = message.get("chat", {}).get("id")
+
+    if not user_id or not chat_id:
+        return
+
+    # اگر کاربر از قبل عضو همه کانال‌ها نیست، سایر دکمه‌های شیشه‌ای
+    # نیز نباید عملیات سفارش را اجرا کنند.
+    try:
+        is_main_admin = int(user_id) == int(ADMIN_ID)
+    except (TypeError, ValueError):
+        is_main_admin = False
+
+    if not is_main_admin:
+        if not force_join.check_access(
+            user_id,
+            chat_id,
+            api,
+            send_message
+        ):
+            callback_id = callback.get("id")
+            if callback_id:
+                answer_callback(
+                    callback_id,
+                    "ابتدا عضو کانال‌های اجباری شو.",
+                    show_alert=True
+                )
+            return
+
     data = callback.get("data", "")
 
     if data.startswith("guaranteed_member_"):
@@ -413,8 +487,6 @@ def guaranteed_membership_monitor():
                 repr(error)
             )
 
-        # فاصله زمانی از پایان بررسی قبلی محاسبه می‌شود؛
-        # بررسی‌های سنگین روی هم انباشته نمی‌شوند.
         elapsed = time.monotonic() - started_at
         sleep_for = max(
             1,
@@ -446,6 +518,7 @@ def main():
     members.init_members_db()
     guaranteed_members.init_guaranteed_db()
     daily_rewards.init_daily_rewards_db()
+    force_join.init_force_join_db()
 
     print("Database initialized.")
 
