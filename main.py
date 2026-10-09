@@ -11,22 +11,17 @@ from features import (
     guaranteed_members,
     daily_rewards,
     force_join,
+    admin_panel,
 )
 
 
 API_URL = f"https://tapi.bale.ai/bot{BOT_TOKEN}/"
-
-# هر نخ نشست HTTP مستقل خودش را دارد.
 _thread_local = threading.local()
-
-# فاصله بین بررسی‌های ممبر تضمینی
 GUARANTEED_CHECK_INTERVAL = 20
 
 
 def api(method, data=None):
-    """ارسال درخواست به API بله با نشست مستقل برای هر نخ."""
-    url = API_URL + method
-
+    """ارسال درخواست به API بله."""
     try:
         session = getattr(_thread_local, "session", None)
 
@@ -35,16 +30,17 @@ def api(method, data=None):
             _thread_local.session = session
 
         response = session.post(
-            url,
+            API_URL + method,
             json=data or {},
             timeout=35
         )
 
         if not response.ok:
-            print(f"\nAPI HTTP Error ({method})")
-            print("Status:", response.status_code)
-            print("Response:", response.text)
-
+            print(
+                f"API HTTP Error ({method}):",
+                response.status_code,
+                response.text
+            )
             return {
                 "ok": False,
                 "http_status": response.status_code,
@@ -54,30 +50,22 @@ def api(method, data=None):
         try:
             result = response.json()
         except ValueError:
-            print(f"\nInvalid JSON response ({method})")
-            print("Response:", response.text)
-
             return {
                 "ok": False,
                 "description": "Invalid JSON response"
             }
 
         if not result.get("ok", False):
-            print(f"\nAPI Error ({method}):", result)
+            print(f"API Error ({method}):", result)
 
         return result
 
     except requests.RequestException as error:
-        print(f"\nConnection Error ({method}):", error)
-
-        return {
-            "ok": False,
-            "description": str(error)
-        }
+        print(f"Connection Error ({method}):", error)
+        return {"ok": False, "description": str(error)}
 
 
 def send_message(chat_id, text, keyboard=None):
-    """ارسال پیام."""
     data = {
         "chat_id": chat_id,
         "text": text
@@ -89,8 +77,16 @@ def send_message(chat_id, text, keyboard=None):
     return api("sendMessage", data)
 
 
+def copy_message(to_chat_id, from_chat_id, message_id):
+    """کپی پیام با حفظ متن و رسانه."""
+    return api("copyMessage", {
+        "chat_id": to_chat_id,
+        "from_chat_id": from_chat_id,
+        "message_id": message_id
+    })
+
+
 def answer_callback(callback_id, text=None, show_alert=False):
-    """پاسخ به کلیک دکمه شیشه‌ای."""
     data = {"callback_query_id": callback_id}
 
     if text:
@@ -102,56 +98,55 @@ def answer_callback(callback_id, text=None, show_alert=False):
     return api("answerCallbackQuery", data)
 
 
-def main_menu():
-    """منوی اصلی ربات."""
-    return {
-        "keyboard": [
-            [
-                {"text": "🛒 سفارش سین"},
-                {"text": "💰 کیف پول"}
-            ],
-            [
-                {"text": "🎰 چرخونه روزانه"},
-                {"text": "🎁 هدیه روزانه"}
-            ],
-            [
-                {"text": "👥 ممبر معمولی"},
-                {"text": "🛡️ ممبر تضمینی"}
-            ],
-            [
-                {"text": "📖 راهنما"}
-            ]
+def main_menu(user_id=None):
+    keyboard = [
+        [
+            {"text": "🛒 سفارش سین"},
+            {"text": "💰 کیف پول"}
         ],
+        [
+            {"text": "🎰 چرخونه روزانه"},
+            {"text": "🎁 هدیه روزانه"}
+        ],
+        [
+            {"text": "👥 ممبر معمولی"},
+            {"text": "🛡️ ممبر تضمینی"}
+        ],
+        [
+            {"text": "📖 راهنما"}
+        ]
+    ]
+
+    if user_id and admin_panel.is_admin(user_id):
+        keyboard.append([{"text": admin_panel.BTN_PANEL}])
+
+    return {
+        "keyboard": keyboard,
         "resize_keyboard": True
     }
 
 
 def register_user(user):
-    """ثبت یا به‌روزرسانی اطلاعات کاربر."""
     user_id = user.get("id")
 
     if not user_id:
         return
 
     with get_connection() as conn:
-        conn.execute(
-            """
+        conn.execute("""
             INSERT INTO users (user_id, username, first_name)
             VALUES (?, ?, ?)
             ON CONFLICT(user_id) DO UPDATE SET
                 username = excluded.username,
                 first_name = excluded.first_name
-            """,
-            (
-                user_id,
-                user.get("username"),
-                user.get("first_name")
-            )
-        )
+        """, (
+            user_id,
+            user.get("username"),
+            user.get("first_name")
+        ))
 
 
-def admin_give_coins(text, admin_id, chat_id, send_message):
-    """دادن سکه فقط توسط ادمین."""
+def admin_give_coins(text, admin_id, chat_id, send_message_func):
     try:
         if int(admin_id) != int(ADMIN_ID):
             return False
@@ -172,7 +167,7 @@ def admin_give_coins(text, admin_id, chat_id, send_message):
     target = match.group(2)
 
     if amount <= 0 or amount > 1_000_000_000:
-        send_message(
+        send_message_func(
             chat_id,
             "❌ تعداد سکه باید بین ۱ تا یک میلیارد باشد."
         )
@@ -183,37 +178,31 @@ def admin_give_coins(text, admin_id, chat_id, send_message):
             target_id = int(target)
 
             if target_id <= 0:
-                send_message(chat_id, "❌ آیدی عددی نامعتبر است.")
+                send_message_func(chat_id, "❌ آیدی عددی نامعتبر است.")
                 return True
 
-            conn.execute(
-                """
+            conn.execute("""
                 INSERT INTO users (user_id, coins)
                 VALUES (?, ?)
                 ON CONFLICT(user_id) DO UPDATE SET
                     coins = users.coins + excluded.coins
-                """,
-                (target_id, amount)
-            )
+            """, (target_id, amount))
 
         else:
             username = target.lstrip("@")
 
-            row = conn.execute(
-                """
+            row = conn.execute("""
                 SELECT user_id
                 FROM users
                 WHERE LOWER(REPLACE(username, '@', '')) = LOWER(?)
                 LIMIT 1
-                """,
-                (username,)
-            ).fetchone()
+            """, (username,)).fetchone()
 
             if not row:
-                send_message(
+                send_message_func(
                     chat_id,
-                    "❌ این یوزرنیم در دیتابیس ربات پیدا نشد.\n"
-                    "از آیدی عددی کاربر استفاده کن."
+                    "❌ این یوزرنیم در دیتابیس پیدا نشد؛ "
+                    "از آیدی عددی استفاده کن."
                 )
                 return True
 
@@ -229,9 +218,9 @@ def admin_give_coins(text, admin_id, chat_id, send_message):
             (target_id,)
         ).fetchone()["coins"]
 
-    send_message(
+    send_message_func(
         chat_id,
-        "✅ سکه‌ها با موفقیت اضافه شدند.\n\n"
+        "✅ سکه‌ها اضافه شدند.\n\n"
         f"👤 آیدی کاربر: {target_id}\n"
         f"🪙 سکه اضافه‌شده: {amount}\n"
         f"💰 موجودی جدید: {balance}"
@@ -241,14 +230,12 @@ def admin_give_coins(text, admin_id, chat_id, send_message):
 
 
 def clear_all_states(user_id):
-    """پاک کردن مراحل فعال سفارش‌ها."""
     views.clear_state(user_id)
     members.clear_state(user_id)
     guaranteed_members.clear_state(user_id)
 
 
 def handle_message(message):
-    """مدیریت پیام‌های کاربران."""
     user = message.get("from", {})
     chat = message.get("chat", {})
     text = (message.get("text") or "").strip()
@@ -261,7 +248,25 @@ def handle_message(message):
 
     register_user(user)
 
-    # دستورات مدیریت جوین اجباری فقط برای ادمین اصلی.
+    # پنل ادمین باید پیش از پردازش قابلیت‌های عادی اجرا شود.
+    if admin_panel.handle_message(
+        message,
+        api,
+        send_message,
+        copy_message
+    ):
+        return
+
+    # کاربر بن‌شده به هیچ قابلیت ربات دسترسی ندارد.
+    if admin_panel.is_banned(user_id):
+        send_message(
+            chat_id,
+            "🚫 شما از استفاده از ربات بن شده‌اید.\n"
+            "در صورت اشتباه بودن این تصمیم، با پشتیبانی تماس بگیرید."
+        )
+        return
+
+    # مدیریت قدیمی جوین اجباری حفظ می‌شود.
     if force_join.handle_admin_command(
         text,
         user_id,
@@ -272,18 +277,11 @@ def handle_message(message):
     ):
         return
 
-    # قابلیت دادن سکه فقط توسط ادمین
     if admin_give_coins(text, user_id, chat_id, send_message):
         return
 
-    # بررسی جوین اجباری برای تمام قابلیت‌های ربات.
-    # ادمین اصلی برای مدیریت و تست مسدود نمی‌شود.
-    try:
-        is_main_admin = int(user_id) == int(ADMIN_ID)
-    except (TypeError, ValueError):
-        is_main_admin = False
-
-    if not is_main_admin:
+    # ادمین‌های پنل می‌توانند مدیریت کنند؛ کاربران عادی باید عضو باشند.
+    if not admin_panel.is_admin(user_id):
         if not force_join.check_access(
             user_id,
             chat_id,
@@ -292,7 +290,6 @@ def handle_message(message):
         ):
             return
 
-    # چرخونه و هدیه روزانه
     if daily_rewards.handle_message(
         text,
         user_id,
@@ -309,7 +306,7 @@ def handle_message(message):
             "سلام فرمانده! 👋\n\n"
             "به ربات سفارش سین و ممبر خوش اومدی.\n"
             "از منوی زیر انتخاب کن:",
-            main_menu()
+            main_menu(user_id)
         )
         return
 
@@ -320,38 +317,23 @@ def handle_message(message):
             chat_id,
             "❌ مراحل فعلی لغو شد.\n\n"
             "از منوی زیر می‌تونی دوباره شروع کنی.",
-            main_menu()
+            main_menu(user_id)
         )
         return
 
     if text == "👥 ممبر معمولی":
         clear_all_states(user_id)
-
-        members.start_order(
-            user_id,
-            chat_id,
-            send_message
-        )
+        members.start_order(user_id, chat_id, send_message)
         return
 
     if text == "🛡️ ممبر تضمینی":
         clear_all_states(user_id)
-
-        guaranteed_members.start_order(
-            user_id,
-            chat_id,
-            send_message
-        )
+        guaranteed_members.start_order(user_id, chat_id, send_message)
         return
 
     if text == "🛒 سفارش سین":
         clear_all_states(user_id)
-
-        views.start_order(
-            user_id,
-            chat_id,
-            send_message
-        )
+        views.start_order(user_id, chat_id, send_message)
         return
 
     if views.handle_message(message, api, send_message):
@@ -371,11 +353,7 @@ def handle_message(message):
             ).fetchone()
 
         coins = row["coins"] if row else 0
-
-        send_message(
-            chat_id,
-            f"💰 موجودی کیف پولت: {coins} سکه"
-        )
+        send_message(chat_id, f"💰 موجودی کیف پولت: {coins} سکه")
         return
 
     if text == "📖 راهنما":
@@ -392,14 +370,21 @@ def handle_message(message):
             "🎁 اولین پاداش ممبر تضمینی: ۲۵ سکه\n"
             "🎁 پاداش ممبرهای بعدی تضمینی: ۳ سکه\n"
             "⏱️ مهلت تضمین: ۴۸ ساعت\n\n"
-            "برای لغو مراحل فعلی بنویس:\n"
-            "/cancel"
+            "برای لغو مراحل فعلی بنویس:\n/cancel"
         )
 
 
 def handle_callback(callback):
-    """مدیریت دکمه‌های شیشه‌ای."""
-    # دکمه بررسی عضویت همیشه باید قابل استفاده باشد.
+    # دکمه بررسی عضویت پنل و دکمه بررسی عضویت قبلی
+    # باید قبل از دکمه‌های سفارش بررسی شوند.
+    if admin_panel.handle_callback(
+        callback,
+        api,
+        send_message,
+        answer_callback
+    ):
+        return
+
     if force_join.handle_callback(
         callback,
         api,
@@ -415,14 +400,18 @@ def handle_callback(callback):
     if not user_id or not chat_id:
         return
 
-    # اگر کاربر از قبل عضو همه کانال‌ها نیست، سایر دکمه‌های شیشه‌ای
-    # نیز نباید عملیات سفارش را اجرا کنند.
-    try:
-        is_main_admin = int(user_id) == int(ADMIN_ID)
-    except (TypeError, ValueError):
-        is_main_admin = False
+    if admin_panel.is_banned(user_id):
+        callback_id = callback.get("id")
 
-    if not is_main_admin:
+        if callback_id:
+            answer_callback(
+                callback_id,
+                "🚫 شما بن شده‌اید.",
+                show_alert=True
+            )
+        return
+
+    if not admin_panel.is_admin(user_id):
         if not force_join.check_access(
             user_id,
             chat_id,
@@ -430,6 +419,7 @@ def handle_callback(callback):
             send_message
         ):
             callback_id = callback.get("id")
+
             if callback_id:
                 answer_callback(
                     callback_id,
@@ -464,10 +454,6 @@ def handle_callback(callback):
 
 
 def guaranteed_membership_monitor():
-    """
-    بررسی خروج ممبرهای تضمینی در نخ جداگانه.
-    حلقه اصلی دریافت پیام‌ها منتظر این بررسی نمی‌ماند.
-    """
     print(
         "Guaranteed membership monitor started. "
         f"Interval: {GUARANTEED_CHECK_INTERVAL}s"
@@ -488,15 +474,10 @@ def guaranteed_membership_monitor():
             )
 
         elapsed = time.monotonic() - started_at
-        sleep_for = max(
-            1,
-            GUARANTEED_CHECK_INTERVAL - elapsed
-        )
-        time.sleep(sleep_for)
+        time.sleep(max(1, GUARANTEED_CHECK_INTERVAL - elapsed))
 
 
 def start_guaranteed_membership_monitor():
-    """شروع مانیتور در پس‌زمینه."""
     worker = threading.Thread(
         target=guaranteed_membership_monitor,
         name="guaranteed-membership-monitor",
@@ -506,23 +487,20 @@ def start_guaranteed_membership_monitor():
 
 
 def main():
-    """راه‌اندازی ربات."""
-
-    if not BOT_TOKEN or BOT_TOKEN == "توکن_واقعی_خودت":
-        print("ERROR: توکن را در config.py تنظیم کن.")
+    if not BOT_TOKEN:
+        print("ERROR: توکن ربات در config.py تنظیم نشده.")
         return
 
-    # آماده‌سازی دیتابیس‌ها
     init_db()
     views.init_views_db()
     members.init_members_db()
     guaranteed_members.init_guaranteed_db()
     daily_rewards.init_daily_rewards_db()
     force_join.init_force_join_db()
+    admin_panel.init_admin_panel_db()
 
     print("Database initialized.")
 
-    # اتصال به API بله
     result = api("getMe")
 
     if not result or not result.get("ok"):
@@ -531,27 +509,17 @@ def main():
         return
 
     bot = result.get("result", {})
-
     bot_id = bot.get("id")
     bot_username = bot.get("username")
 
-    members.set_bot_info(
-        bot_id,
-        bot_username
-    )
-
-    guaranteed_members.set_bot_info(
-        bot_id,
-        bot_username
-    )
+    members.set_bot_info(bot_id, bot_username)
+    guaranteed_members.set_bot_info(bot_id, bot_username)
 
     print("Bot connected:", bot_username or bot_id)
 
-    # مانیتور فقط یک بار اجرا می‌شود و حلقه اصلی را مسدود نمی‌کند.
     start_guaranteed_membership_monitor()
 
     offset = None
-
     print("Bot is running...")
 
     while True:
@@ -570,16 +538,11 @@ def main():
             for update in result.get("result", []):
                 offset = update["update_id"] + 1
 
-                message = update.get("message")
-                callback = update.get("callback_query")
-
                 try:
-                    if message:
-                        handle_message(message)
-
-                    elif callback:
-                        handle_callback(callback)
-
+                    if update.get("message"):
+                        handle_message(update["message"])
+                    elif update.get("callback_query"):
+                        handle_callback(update["callback_query"])
                 except Exception as error:
                     print("Update processing error:", repr(error))
 
