@@ -1,5 +1,6 @@
 
 import time
+import threading
 import requests
 
 from config import BOT_TOKEN
@@ -8,17 +9,25 @@ from features import views, members, guaranteed_members
 
 
 API_URL = f"https://tapi.bale.ai/bot{BOT_TOKEN}/"
-session = requests.Session()
 
-GUARANTEED_CHECK_INTERVAL = 300  # هر ۵ دقیقه
-last_guaranteed_check = 0
+# هر نخ نشست HTTP مستقل خودش را دارد.
+_thread_local = threading.local()
+
+# فاصله بین بررسی‌های ممبر تضمینی
+GUARANTEED_CHECK_INTERVAL = 20
 
 
 def api(method, data=None):
-    """ارسال درخواست به API بله با گزارش خطاها."""
+    """ارسال درخواست به API بله با نشست مستقل برای هر نخ."""
     url = API_URL + method
 
     try:
+        session = getattr(_thread_local, "session", None)
+
+        if session is None:
+            session = requests.Session()
+            _thread_local.session = session
+
         response = session.post(
             url,
             json=data or {},
@@ -119,7 +128,7 @@ def register_user(user):
 
 
 def clear_all_states(user_id):
-    """پاک کردن مراحل فعال هر دو نوع سفارش و سین."""
+    """پاک کردن مراحل فعال سفارش‌ها."""
     views.clear_state(user_id)
     members.clear_state(user_id)
     guaranteed_members.clear_state(user_id)
@@ -139,7 +148,6 @@ def handle_message(message):
 
     register_user(user)
 
-    # شروع ربات
     if text in ("/start", "شروع"):
         clear_all_states(user_id)
 
@@ -152,7 +160,6 @@ def handle_message(message):
         )
         return
 
-    # لغو مراحل
     if text == "/cancel":
         clear_all_states(user_id)
 
@@ -164,7 +171,6 @@ def handle_message(message):
         )
         return
 
-    # سفارش ممبر معمولی
     if text == "👥 ممبر معمولی":
         clear_all_states(user_id)
 
@@ -175,7 +181,6 @@ def handle_message(message):
         )
         return
 
-    # سفارش ممبر تضمینی
     if text == "🛡️ ممبر تضمینی":
         clear_all_states(user_id)
 
@@ -186,7 +191,6 @@ def handle_message(message):
         )
         return
 
-    # سفارش سین
     if text == "🛒 سفارش سین":
         clear_all_states(user_id)
 
@@ -197,19 +201,15 @@ def handle_message(message):
         )
         return
 
-    # ادامه مراحل سفارش سین
     if views.handle_message(message, api, send_message):
         return
 
-    # ادامه مراحل ممبر معمولی
     if members.handle_message(message, api, send_message):
         return
 
-    # ادامه مراحل ممبر تضمینی
     if guaranteed_members.handle_message(message, api, send_message):
         return
 
-    # کیف پول
     if text == "💰 کیف پول":
         with get_connection() as conn:
             row = conn.execute(
@@ -225,7 +225,6 @@ def handle_message(message):
         )
         return
 
-    # راهنما
     if text == "📖 راهنما":
         send_message(
             chat_id,
@@ -247,7 +246,6 @@ def handle_callback(callback):
     """مدیریت دکمه‌های شیشه‌ای."""
     data = callback.get("data", "")
 
-    # ممبر تضمینی؛ پیشوند جداگانه دارد.
     if data.startswith("guaranteed_member_"):
         guaranteed_members.handle_callback_query(
             callback,
@@ -256,7 +254,6 @@ def handle_callback(callback):
         )
         return
 
-    # ممبر معمولی
     if data.startswith("member_"):
         members.handle_callback_query(
             callback,
@@ -265,7 +262,6 @@ def handle_callback(callback):
         )
         return
 
-    # سفارش سین
     views.handle_callback_query(
         callback,
         api,
@@ -273,26 +269,48 @@ def handle_callback(callback):
     )
 
 
-def check_guaranteed_members_periodically():
-    """بررسی خروج اعضای سفارش‌های تضمینی هر پنج دقیقه."""
-    global last_guaranteed_check
+def guaranteed_membership_monitor():
+    """
+    بررسی خروج ممبرهای تضمینی در نخ جداگانه.
+    حلقه اصلی دریافت پیام‌ها منتظر این بررسی نمی‌ماند.
+    """
+    print(
+        "Guaranteed membership monitor started. "
+        f"Interval: {GUARANTEED_CHECK_INTERVAL}s"
+    )
 
-    now = time.monotonic()
+    while True:
+        started_at = time.monotonic()
 
-    if now - last_guaranteed_check < GUARANTEED_CHECK_INTERVAL:
-        return
+        try:
+            guaranteed_members.check_guaranteed_memberships(
+                api,
+                send_message
+            )
+        except Exception as error:
+            print(
+                "Guaranteed membership monitoring error:",
+                repr(error)
+            )
 
-    # پیش از اجرا زمان را ثبت می‌کنیم تا در صورت خطا،
-    # بررسی به شکل بی‌نهایت و پشت سر هم تکرار نشود.
-    last_guaranteed_check = now
-
-    try:
-        guaranteed_members.check_guaranteed_memberships(
-            api,
-            send_message
+        # فاصله زمانی از پایان بررسی قبلی محاسبه می‌شود؛
+        # بررسی‌های سنگین روی هم انباشته نمی‌شوند.
+        elapsed = time.monotonic() - started_at
+        sleep_for = max(
+            1,
+            GUARANTEED_CHECK_INTERVAL - elapsed
         )
-    except Exception as error:
-        print("Guaranteed membership monitoring error:", repr(error))
+        time.sleep(sleep_for)
+
+
+def start_guaranteed_membership_monitor():
+    """شروع مانیتور در پس‌زمینه."""
+    worker = threading.Thread(
+        target=guaranteed_membership_monitor,
+        name="guaranteed-membership-monitor",
+        daemon=True
+    )
+    worker.start()
 
 
 def main():
@@ -313,7 +331,7 @@ def main():
     # اتصال به API بله
     result = api("getMe")
 
-    if not result.get("ok"):
+    if not result or not result.get("ok"):
         print("اتصال به API بله ناموفق بود.")
         print("پاسخ:", result)
         return
@@ -323,7 +341,6 @@ def main():
     bot_id = bot.get("id")
     bot_username = bot.get("username")
 
-    # تنظیم اطلاعات ربات در هر دو ماژول
     members.set_bot_info(
         bot_id,
         bot_username
@@ -335,6 +352,9 @@ def main():
     )
 
     print("Bot connected:", bot_username or bot_id)
+
+    # مانیتور فقط یک بار اجرا می‌شود و حلقه اصلی را مسدود نمی‌کند.
+    start_guaranteed_membership_monitor()
 
     offset = None
 
@@ -349,8 +369,7 @@ def main():
 
             result = api("getUpdates", params)
 
-            if not result.get("ok"):
-                check_guaranteed_members_periodically()
+            if not result or not result.get("ok"):
                 time.sleep(3)
                 continue
 
@@ -369,9 +388,6 @@ def main():
 
                 except Exception as error:
                     print("Update processing error:", repr(error))
-
-            # بررسی دوره‌ای حتی وقتی پیام جدیدی وجود ندارد
-            check_guaranteed_members_periodically()
 
         except KeyboardInterrupt:
             print("Bot stopped.")
