@@ -1,4 +1,3 @@
-
 import time
 import threading
 import requests
@@ -12,6 +11,7 @@ from features import (
     daily_rewards,
     force_join,
     admin_panel,
+    backup,
 )
 
 
@@ -244,6 +244,11 @@ def handle_message(message):
     chat_id = chat.get("id")
 
     if not user_id or not chat_id:
+        return
+
+    # بکاپ دیتابیس؛ فقط ادمین و فقط در گفت‌وگوی خصوصی.
+    # اگر دستور بکاپ بود، از ادامه پردازش پیام جلوگیری می‌شود.
+    if backup.handle_message(message, send_message):
         return
 
     register_user(user)
