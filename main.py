@@ -248,7 +248,6 @@ def handle_message(message):
         return
 
     # بکاپ دیتابیس؛ فقط ادمین و فقط در گفت‌وگوی خصوصی.
-    # اگر دستور بکاپ بود، از ادامه پردازش پیام جلوگیری می‌شود.
     if backup.handle_message(message, send_message):
         return
 
@@ -381,8 +380,75 @@ def handle_message(message):
 
 
 def handle_callback(callback):
-    # دکمه بررسی عضویت پنل و دکمه بررسی عضویت قبلی
-    # باید قبل از دکمه‌های سفارش بررسی شوند.
+    data = callback.get("data", "")
+    callback_id = callback.get("id")
+    user_id = callback.get("from", {}).get("id")
+
+    # اصلاح گزارش: قبل از جوین اجباری پردازش شود.
+    # در غیر این صورت، به‌جای گزارش، پیام عضویت نمایش داده می‌شد.
+    if data.startswith("report:"):
+        views.handle_callback_query(
+            callback,
+            api,
+            send_message
+        )
+        return
+
+    # دکمه‌های گزارش مدیریتی فقط برای ادمین‌ها هستند.
+    if data.startswith("reportban:"):
+        if not user_id or not admin_panel.is_admin(user_id):
+            if callback_id:
+                answer_callback(
+                    callback_id,
+                    "⛔ این دکمه فقط برای ادمین است.",
+                    show_alert=True
+                )
+            return
+
+        try:
+            _, target_id, order_id = data.split(":", 2)
+            target_id = int(target_id)
+            int(order_id)
+        except (ValueError, TypeError):
+            if callback_id:
+                answer_callback(
+                    callback_id,
+                    "❌ اطلاعات دکمه نامعتبر است.",
+                    show_alert=True
+                )
+            return
+
+        ok, message_text = admin_panel.ban_user(
+            target_id,
+            user_id
+        )
+
+        if callback_id:
+            answer_callback(
+                callback_id,
+                ("✅ " if ok else "⚠️ ") + message_text,
+                show_alert=True
+            )
+        return
+
+    if data.startswith("reportdone:"):
+        if not user_id or not admin_panel.is_admin(user_id):
+            if callback_id:
+                answer_callback(
+                    callback_id,
+                    "⛔ این دکمه فقط برای ادمین است.",
+                    show_alert=True
+                )
+            return
+
+        if callback_id:
+            answer_callback(
+                callback_id,
+                "✅ گزارش بررسی شد."
+            )
+        return
+
+    # مدیریت دکمه‌های پنل حفظ می‌شود.
     if admin_panel.handle_callback(
         callback,
         api,
@@ -399,7 +465,6 @@ def handle_callback(callback):
     ):
         return
 
-    user_id = callback.get("from", {}).get("id")
     message = callback.get("message", {})
     chat_id = message.get("chat", {}).get("id")
 
@@ -407,8 +472,6 @@ def handle_callback(callback):
         return
 
     if admin_panel.is_banned(user_id):
-        callback_id = callback.get("id")
-
         if callback_id:
             answer_callback(
                 callback_id,
@@ -424,8 +487,6 @@ def handle_callback(callback):
             api,
             send_message
         ):
-            callback_id = callback.get("id")
-
             if callback_id:
                 answer_callback(
                     callback_id,
@@ -433,8 +494,6 @@ def handle_callback(callback):
                     show_alert=True
                 )
             return
-
-    data = callback.get("data", "")
 
     if data.startswith("guaranteed_member_"):
         guaranteed_members.handle_callback_query(
@@ -518,9 +577,7 @@ def main():
     bot_id = bot.get("id")
     bot_username = bot.get("username")
 
-    # تنها خط اضافه‌شده برای دکمه ورود به ربات در سفارش سین
     views.set_bot_info(bot_id, bot_username)
-
     members.set_bot_info(bot_id, bot_username)
     guaranteed_members.set_bot_info(bot_id, bot_username)
 
