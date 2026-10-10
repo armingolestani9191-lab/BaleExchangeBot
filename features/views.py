@@ -243,9 +243,9 @@ def handle_message(message, api, send_message):
             order_id = cursor.lastrowid
             conn.commit()
 
-        # انتشار پست فورواردشده در کانال سفارش‌ها
-        copied = api(
-            "copyMessage",
+        # فوروارد واقعی پیام اصلی کاربر به کانال سفارش‌ها
+        forwarded = api(
+            "forwardMessage",
             {
                 "chat_id": ORDER_CHANNEL,
                 "from_chat_id": payload["source_chat_id"],
@@ -253,7 +253,8 @@ def handle_message(message, api, send_message):
             }
         )
 
-        if not copied.get("ok"):
+        # اگر فوروارد ناموفق بود، پول کاربر برگردد
+        if not forwarded.get("ok"):
             with get_connection() as conn:
                 conn.execute("BEGIN IMMEDIATE")
 
@@ -277,13 +278,13 @@ def handle_message(message, api, send_message):
 
             send_message(
                 chat_id,
-                "❌ انتشار پست در کانال ناموفق بود.\n"
+                "❌ فوروارد پست به کانال ناموفق بود.\n"
                 "سکه‌های سفارش به حسابت برگردونده شدن."
             )
             return True
 
         channel_message_id = (
-            copied.get("result", {}).get("message_id")
+            forwarded.get("result", {}).get("message_id")
         )
 
         if not channel_message_id:
@@ -310,12 +311,12 @@ def handle_message(message, api, send_message):
 
             send_message(
                 chat_id,
-                "❌ شناسهٔ پست منتشرشده دریافت نشد.\n"
+                "❌ شناسهٔ پیام فورواردشده دریافت نشد.\n"
                 "سکه‌های سفارش به حسابت برگردونده شدن."
             )
             return True
 
-        # متن جدید سفارش؛ منطق سفارش تغییر نکرده
+        # پیام اطلاعات سفارش؛ جدا از پست فورواردشده
         info_text = (
             f"📋 **سفارش سین**\n\n"
             f"👤 سین درخواستی: {target_count}\n"
