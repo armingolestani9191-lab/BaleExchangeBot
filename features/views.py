@@ -606,7 +606,10 @@ def handle_callback_query(callback, api, send_message):
             answer_callback(api, callback_id, "❌ سفارش نامعتبره.")
             return True
 
+        # تراکنش فوری جلوی ثبت چند گزارش هم‌زمان برای یک سفارش را می‌گیرد.
         with get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+
             order = conn.execute(
                 """
                 SELECT *
@@ -617,6 +620,7 @@ def handle_callback_query(callback, api, send_message):
             ).fetchone()
 
             if not order or order["status"] != "pending":
+                conn.commit()
                 answer_callback(
                     api,
                     callback_id,
@@ -625,6 +629,7 @@ def handle_callback_query(callback, api, send_message):
                 return True
 
             if order["user_id"] == user_id:
+                conn.commit()
                 answer_callback(
                     api,
                     callback_id,
@@ -632,7 +637,27 @@ def handle_callback_query(callback, api, send_message):
                 )
                 return True
 
-            # ثبت اطلاعات گزارش‌دهنده
+            # هر کاربر برای هر سفارش فقط یک‌بار اجازهٔ گزارش دارد.
+            existing_report = conn.execute(
+                """
+                SELECT id
+                FROM reports
+                WHERE order_id = ? AND reporter_id = ?
+                LIMIT 1
+                """,
+                (order_id, user_id)
+            ).fetchone()
+
+            if existing_report:
+                conn.commit()
+                answer_callback(
+                    api,
+                    callback_id,
+                    "⚠️ این سفارش رو قبلاً گزارش کردی."
+                )
+                return True
+
+            # ثبت یا به‌روزرسانی اطلاعات گزارش‌دهنده
             conn.execute(
                 """
                 INSERT INTO users (
@@ -670,6 +695,9 @@ def handle_callback_query(callback, api, send_message):
                 (order_id, user_id, "گزارش از کانال")
             )
 
+            conn.commit()
+
+        # گزارش فقط بعد از ثبت موفق در دیتابیس به ادمین فرستاده می‌شود.
         answer_callback(
             api,
             callback_id,
@@ -677,13 +705,12 @@ def handle_callback_query(callback, api, send_message):
         )
 
         if ADMIN_ID:
-            # اول خود بنر سفارش را برای ادمین کپی می‌کنیم.
-            # channel_message_id شناسهٔ بنر است، نه پیام سفارش سین.
+            # فوروارد واقعی بنر سفارش؛ حفظ رسانه و سربرگ فوروارد.
             banner_message_id = order["channel_message_id"]
 
             if banner_message_id:
                 banner_result = api(
-                    "copyMessage",
+                    "forwardMessage",
                     {
                         "chat_id": ADMIN_ID,
                         "from_chat_id": ORDER_CHANNEL,
@@ -693,7 +720,7 @@ def handle_callback_query(callback, api, send_message):
 
                 if not banner_result.get("ok"):
                     print(
-                        "Could not copy reported order banner:",
+                        "Could not forward reported order banner:",
                         banner_result
                     )
 
