@@ -1,4 +1,3 @@
-
 import time
 import threading
 import requests
@@ -303,7 +302,7 @@ def handle_message(message):
     ):
         return
 
-        if text in ("/start", "شروع"):
+    if text in ("/start", "شروع"):
         clear_all_states(user_id)
 
         send_message(
