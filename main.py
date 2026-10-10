@@ -1,3 +1,4 @@
+
 import time
 import threading
 import requests
@@ -516,6 +517,9 @@ def main():
     bot = result.get("result", {})
     bot_id = bot.get("id")
     bot_username = bot.get("username")
+
+    # تنها خط اضافه‌شده برای دکمه ورود به ربات در سفارش سین
+    views.set_bot_info(bot_id, bot_username)
 
     members.set_bot_info(bot_id, bot_username)
     guaranteed_members.set_bot_info(bot_id, bot_username)
