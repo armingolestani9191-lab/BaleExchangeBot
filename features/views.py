@@ -17,7 +17,6 @@ def set_bot_info(bot_id, username):
     BOT_USERNAME = (username or "").lstrip("@")
 
 
-# متن پیام بعد از تکمیل سفارش
 COMPLETED_ORDER_MESSAGE = """🎉 تبریک!
 
 👁️ سفارش سینت با موفقیت تکمیل شد!
@@ -137,7 +136,7 @@ def start_order(user_id, chat_id, send_message):
 def handle_message(message, api, send_message):
     user = message.get("from", {})
     chat = message.get("chat", {})
-    text = message.get("text", "").strip()
+    text = (message.get("text") or "").strip()
 
     user_id = user.get("id")
     chat_id = chat.get("id")
@@ -633,6 +632,7 @@ def handle_callback_query(callback, api, send_message):
                 )
                 return True
 
+            # ثبت اطلاعات گزارش‌دهنده
             conn.execute(
                 """
                 INSERT INTO users (
@@ -650,6 +650,16 @@ def handle_callback_query(callback, api, send_message):
                 )
             )
 
+            # دریافت مشخصات خریدار برای پیام ادمین
+            buyer = conn.execute(
+                """
+                SELECT username, first_name
+                FROM users
+                WHERE user_id = ?
+                """,
+                (order["user_id"],)
+            ).fetchone()
+
             conn.execute(
                 """
                 INSERT INTO reports (
@@ -663,16 +673,74 @@ def handle_callback_query(callback, api, send_message):
         answer_callback(
             api,
             callback_id,
-            "✅ گزارش شما ثبت شد."
+            "✅ گزارش برای ادمین ارسال شد."
         )
 
         if ADMIN_ID:
+            # اول خود بنر سفارش را برای ادمین کپی می‌کنیم.
+            # channel_message_id شناسهٔ بنر است، نه پیام سفارش سین.
+            banner_message_id = order["channel_message_id"]
+
+            if banner_message_id:
+                banner_result = api(
+                    "copyMessage",
+                    {
+                        "chat_id": ADMIN_ID,
+                        "from_chat_id": ORDER_CHANNEL,
+                        "message_id": banner_message_id
+                    }
+                )
+
+                if not banner_result.get("ok"):
+                    print(
+                        "Could not copy reported order banner:",
+                        banner_result
+                    )
+
+            buyer_id = order["user_id"]
+
+            buyer_username = (
+                f"@{buyer['username']}"
+                if buyer and buyer["username"]
+                else "ندارد"
+            )
+
+            buyer_name = (
+                buyer["first_name"]
+                if buyer and buyer["first_name"]
+                else "ثبت نشده"
+            )
+
+            report_text = (
+                "🚩 گزارش جدید سفارش سین\n\n"
+                f"📋 شماره سفارش: {order_id}\n"
+                f"👤 نام خریدار: {buyer_name}\n"
+                f"🔗 یوزرنیم خریدار: {buyer_username}\n"
+                f"🆔 آیدی عددی خریدار: {buyer_id}\n"
+                f"🧾 آیدی گزارش‌دهنده: {user_id}"
+            )
+
+            report_keyboard = {
+                "inline_keyboard": [[
+                    {
+                        "text": "🚫 بن کردن خریدار",
+                        "callback_data": (
+                            f"reportban:{buyer_id}:{order_id}"
+                        )
+                    },
+                    {
+                        "text": "✅ بررسی شد",
+                        "callback_data": f"reportdone:{order_id}"
+                    }
+                ]]
+            }
+
             send_message(
                 ADMIN_ID,
-                "🚩 گزارش جدید سفارش سین\n\n"
-                f"🆔 شماره سفارش: {order_id}\n"
-                f"👤 گزارش‌دهنده: {user_id}\n"
-                f"👤 صاحب سفارش: {order['user_id']}"
+                report_text,
+                report_keyboard
             )
 
         return True
+
+    return False
