@@ -7,6 +7,15 @@ from config import ORDER_CHANNEL, ADMIN_ID
 
 MAX_ORDER_COUNT = 10000
 
+BOT_ID = None
+BOT_USERNAME = None
+
+
+def set_bot_info(bot_id, username):
+    global BOT_ID, BOT_USERNAME
+    BOT_ID = bot_id
+    BOT_USERNAME = (username or "").lstrip("@")
+
 
 # متن پیام بعد از تکمیل سفارش
 COMPLETED_ORDER_MESSAGE = """🎉 تبریک!
@@ -88,20 +97,28 @@ def answer_callback(api, callback_id, text):
 
 
 def order_keyboard(order_id):
-    return {
-        "inline_keyboard": [
-            [
-                {
-                    "text": "👁️ دیدم",
-                    "callback_data": f"seen:{order_id}"
-                },
-                {
-                    "text": "🚩 گزارش",
-                    "callback_data": f"report:{order_id}"
-                }
-            ]
+    keyboard = [
+        [
+            {
+                "text": "👁️ دیدم",
+                "callback_data": f"seen:{order_id}"
+            },
+            {
+                "text": "🚩 گزارش",
+                "callback_data": f"report:{order_id}"
+            }
         ]
-    }
+    ]
+
+    if BOT_USERNAME:
+        keyboard.append([
+            {
+                "text": "🤖 رفتن به ربات",
+                "url": f"https://ble.ir/{BOT_USERNAME}"
+            }
+        ])
+
+    return {"inline_keyboard": keyboard}
 
 
 def start_order(user_id, chat_id, send_message):
