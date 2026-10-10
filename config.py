@@ -12,7 +12,7 @@ BOT_TOKEN = "848571933:f0aQ5uN_JgJgxH94pWvVS9ANgIiD8ramL_s"
 ADMIN_ID = 595450272
 
 # کانال انتشار سفارش‌ها
-ORDER_CHANNEL = "@mega_sinbot"
+ORDER_CHANNEL = "@megasin"
 
 
 # ==============================
