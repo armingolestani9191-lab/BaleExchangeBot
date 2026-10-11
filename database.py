@@ -1,4 +1,3 @@
-
 import os
 import sqlite3
 
@@ -102,6 +101,48 @@ def init_db():
 
             CREATE INDEX IF NOT EXISTS idx_reports_order
                 ON reports(order_id);
+
+            -- جدول کانال‌های همکار
+            CREATE TABLE IF NOT EXISTS partner_channels (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner_id INTEGER NOT NULL,
+                chat_id INTEGER NOT NULL UNIQUE,
+                username TEXT,
+                title TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                approved_at TEXT
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_partner_channels_owner
+                ON partner_channels(owner_id);
+
+            CREATE INDEX IF NOT EXISTS idx_partner_channels_status
+                ON partner_channels(status);
+
+            -- ثبت درآمد و اقدامات معتبر هر کانال
+            CREATE TABLE IF NOT EXISTS partner_earnings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_id INTEGER NOT NULL,
+                order_type TEXT NOT NULL,
+                order_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                amount INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+                UNIQUE(
+                    channel_id,
+                    order_type,
+                    order_id,
+                    user_id
+                ),
+
+                FOREIGN KEY (channel_id)
+                    REFERENCES partner_channels(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_partner_earnings_channel
+                ON partner_earnings(channel_id);
         """)
 
 
