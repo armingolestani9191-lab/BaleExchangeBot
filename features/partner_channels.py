@@ -5,7 +5,7 @@ from database import get_connection
 from features import admin_panel
 
 
-BTN_PARTNER = "📢 کانال همکار"
+BTN_PARTNER = "📢 افزودن کانال"
 BTN_ADD_CHANNEL = "➕ افزودن کانال"
 BTN_REMOVE_CHANNEL = "➖ حذف کانال"
 BTN_MY_CHANNELS = "📋 کانال‌های من"
