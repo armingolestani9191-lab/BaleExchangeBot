@@ -8,10 +8,13 @@ from features import admin_panel
 BTN_CHANNEL_STATS = "📊 آمار و وضعیت کانال‌ها"
 
 PAGE_SIZE = 15
-
-# وضعیت بررسی کانال‌ها در حافظه نگهداری نمی‌شود؛
-# برای هر بار باز کردن صفحه، وضعیت از API بررسی می‌شود.
 _PREFIX = "acs:"
+
+REQUIRED_PERMISSIONS = (
+    "can_post_messages",
+    "can_edit_messages",
+    "can_delete_messages",
+)
 
 
 def _send(send_message, chat_id, text, keyboard=None):
@@ -28,9 +31,7 @@ def _button(text, callback_data):
 
 
 def _inline_keyboard(rows):
-    return {
-        "inline_keyboard": rows
-    }
+    return {"inline_keyboard": rows}
 
 
 def _get_channels():
@@ -57,7 +58,10 @@ def _get_channels():
 
 
 def _get_bot_id(api):
-    result = api("getMe", {})
+    try:
+        result = api("getMe", {})
+    except Exception:
+        return None
 
     if not result or not result.get("ok"):
         return None
@@ -65,39 +69,39 @@ def _get_bot_id(api):
     return result.get("result", {}).get("id")
 
 
+def _unknown_check(status):
+    return {
+        "checkable": False,
+        "member": None,
+        "is_admin": None,
+        "permissions_ok": None,
+        "active": None,
+        "status": status,
+    }
+
+
 def _check_channel(api, channel, bot_id):
     """
     Check bot membership and permissions for one registered channel.
 
-    If the API cannot verify the status, return unknown instead of
-    incorrectly marking the channel inactive.
+    Missing permission fields are treated as unknown, not as permission
+    granted. Only verified permissions can make a channel active.
     """
     if not bot_id:
-        return {
-            "checkable": False,
-            "member": None,
-            "is_admin": None,
-            "permissions_ok": None,
-            "active": None,
-            "status": "اطلاعات ربات دریافت نشد",
-        }
+        return _unknown_check("اطلاعات ربات دریافت نشد")
 
-    result = api("getChatMember", {
-        "chat_id": channel["chat_id"],
-        "user_id": bot_id,
-    })
+    try:
+        result = api("getChatMember", {
+            "chat_id": channel["chat_id"],
+            "user_id": bot_id,
+        })
+    except Exception:
+        return _unknown_check("وضعیت قابل بررسی نیست")
 
     if not result or not result.get("ok"):
-        return {
-            "checkable": False,
-            "member": None,
-            "is_admin": None,
-            "permissions_ok": None,
-            "active": None,
-            "status": "وضعیت قابل بررسی نیست",
-        }
+        return _unknown_check("وضعیت قابل بررسی نیست")
 
-    member_info = result.get("result", {})
+    member_info = result.get("result") or {}
     member_status = member_info.get("status")
 
     is_member = member_status in (
@@ -134,29 +138,36 @@ def _check_channel(api, channel, bot_id):
             "status": "ربات ادمین نیست",
         }
 
-    # سازندهٔ کانال محدودیت دسترسی ادمین معمولی را ندارد.
+    # سازندهٔ کانال دسترسی کامل دارد.
     if member_status in ("creator", "owner"):
         permissions_ok = True
     else:
-        required_permissions = (
-            "can_post_messages",
-            "can_edit_messages",
-            "can_delete_messages",
-        )
+        permission_values = [
+            member_info.get(permission)
+            for permission in REQUIRED_PERMISSIONS
+        ]
 
-        # اگر فیلدی صریحاً False باشد، دسترسی موردنیاز موجود نیست.
-        # اگر API فیلدی را نفرستاده باشد، آن را به‌تنهایی False فرض نمی‌کنیم.
-        permissions_ok = not any(
-            member_info.get(permission) is False
-            for permission in required_permissions
-        )
+        # وجود حتی یک مجوز صریحاً غیرفعال یعنی دسترسی‌ها کامل نیستند.
+        if any(value is False for value in permission_values):
+            permissions_ok = False
 
-    active = is_admin and permissions_ok
+        # فقط وقتی تمام مجوزها صریحاً True باشند، دسترسی تأیید می‌شود.
+        elif all(value is True for value in permission_values):
+            permissions_ok = True
 
-    if active:
+        # فیلد مفقود یا None به معنی مجوز داشتن نیست.
+        else:
+            permissions_ok = None
+
+    if permissions_ok is True:
+        active = True
         status_text = "فعال"
+    elif permissions_ok is False:
+        active = False
+        status_text = "دسترسی‌های لازم کامل نیست"
     else:
-        status_text = "ادمین است، اما دسترسی لازم کامل نیست"
+        active = None
+        status_text = "مجوزها از API قابل تأیید نیستند"
 
     return {
         "checkable": True,
@@ -210,17 +221,18 @@ def _make_summary(api, channels):
         check = _check_channel(api, channel, bot_id)
         statuses[channel["id"]] = check
 
-        if not check["checkable"]:
+        # اگر وضعیت نهایی یا بررسی API نامشخص باشد، آن را
+        # بررسی‌نشده حساب می‌کنیم؛ ولی اطلاعات معلوم را نگه می‌داریم.
+        if not check["checkable"] or check["active"] is None:
             unchecked_channels += 1
-            continue
 
-        if check["member"]:
+        if check["member"] is True:
             registered_members += 1
 
-        if check["is_admin"]:
+        if check["is_admin"] is True:
             admin_channels += 1
 
-        if check["active"]:
+        if check["active"] is True:
             active_channels += 1
 
     return {
@@ -242,7 +254,8 @@ def _stats_text(summary):
         f"✅ کانال‌های فعال: {summary['active']}\n"
         f"⚠️ کانال‌های بررسی‌نشده: {summary['unchecked']}\n\n"
         "کانال فعال یعنی ربات ادمین باشد و دسترسی‌های لازم "
-        "برای ارسال، ویرایش و حذف پیام را داشته باشد.\n"
+        "برای ارسال، ویرایش و حذف پیام تأیید شده باشند.\n"
+        "وضعیت نامشخص به معنی غیرفعال بودن قطعی نیست.\n"
         "برای دیدن جزئیات، یکی از کانال‌ها را انتخاب کن."
     )
 
@@ -376,6 +389,7 @@ def _show_detail(chat_id, channel_id, page, api, send_message):
         channel_username = "ندارد"
 
     active_value = check.get("active")
+
     if active_value is True:
         active_text = "✅ فعال"
     elif active_value is False:
@@ -396,6 +410,7 @@ def _show_detail(chat_id, channel_id, page, api, send_message):
         "🔑 دسترسی‌های لازم: "
         f"{_yes_no(check.get('permissions_ok'))}\n"
         f"📊 وضعیت نهایی: {active_text}\n"
+        f"ℹ️ توضیح وضعیت: {check.get('status', 'نامشخص')}\n"
         f"🕒 تاریخ ثبت: {channel.get('created_at') or 'نامشخص'}\n"
     )
 
@@ -407,7 +422,10 @@ def _show_detail(chat_id, channel_id, page, api, send_message):
             )
         ],
         [
-            _button("🔄 بررسی دوباره", f"{_PREFIX}detail:{channel_id}:{page}")
+            _button(
+                "🔄 بررسی دوباره",
+                f"{_PREFIX}detail:{channel_id}:{page}",
+            )
         ],
         [
             _button("🔙 بازگشت به فهرست", f"{_PREFIX}list:{page}")
@@ -493,9 +511,8 @@ def _delete_channel(chat_id, channel_id, page, send_message):
 
         channel = dict(row)
 
-        # حذف نرم: سابقهٔ درآمد و پاداش‌ها حفظ می‌شود.
-        # چون انتشار فقط برای status='active' انجام می‌شود،
-        # از این به بعد سفارش جدیدی به این کانال نمی‌رود.
+        # حذف نرم: سوابق درآمد و پاداش‌ها حفظ می‌شوند.
+        # انتشار سفارش‌ها فقط برای کانال‌های active انجام می‌شود.
         conn.execute("""
             UPDATE partner_channels
             SET status = 'deleted'
