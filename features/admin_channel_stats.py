@@ -1,5 +1,5 @@
 
-"""Admin statistics and management for registered Bale channels."""
+"""Admin statistics and management for partner channels."""
 
 from database import get_connection
 from features import admin_panel
@@ -7,57 +7,53 @@ from features import admin_panel
 
 BTN_CHANNEL_STATS = "📊 آمار و وضعیت کانال‌ها"
 
-PAGE_SIZE = 8
+PAGE_SIZE = 15
 
-MEMBER_STATUSES = {
-    "creator",
-    "administrator",
-    "owner",
-    "member",
-}
+# وضعیت بررسی کانال‌ها در حافظه نگهداری نمی‌شود؛
+# برای هر بار باز کردن صفحه، وضعیت از API بررسی می‌شود.
+_PREFIX = "acs:"
 
 
-def _inline_keyboard(rows):
-    return {"inline_keyboard": rows}
+def _send(send_message, chat_id, text, keyboard=None):
+    if keyboard:
+        return send_message(chat_id, text, keyboard)
+    return send_message(chat_id, text)
 
 
-def _is_member(member):
-    status = (member or {}).get("status")
-
-    if status in MEMBER_STATUSES:
-        return True
-
-    return (
-        status == "restricted"
-        and bool((member or {}).get("is_member"))
-    )
-
-
-def _is_admin(member):
-    return (member or {}).get("status") in {
-        "creator",
-        "administrator",
-        "owner",
+def _button(text, callback_data):
+    return {
+        "text": text,
+        "callback_data": callback_data,
     }
 
 
-def _has_required_permissions(member):
-    """Use the same permission requirements as partner channel registration."""
-    if not _is_admin(member):
-        return False
+def _inline_keyboard(rows):
+    return {
+        "inline_keyboard": rows
+    }
 
-    # Creator has full channel control.
-    if (member or {}).get("status") in {"creator", "owner"}:
-        return True
 
-    return all(
-        member.get(permission) is not False
-        for permission in (
-            "can_post_messages",
-            "can_edit_messages",
-            "can_delete_messages",
-        )
-    )
+def _get_channels():
+    """Return registered partner channels without deleting any history."""
+    with get_connection() as conn:
+        rows = conn.execute("""
+            SELECT
+                pc.id,
+                pc.owner_id,
+                pc.chat_id,
+                pc.username,
+                pc.title,
+                pc.status,
+                pc.created_at,
+                u.username AS owner_username
+            FROM partner_channels pc
+            LEFT JOIN users u
+                ON u.user_id = pc.owner_id
+            WHERE pc.status != 'deleted'
+            ORDER BY pc.id DESC
+        """).fetchall()
+
+    return [dict(row) for row in rows]
 
 
 def _get_bot_id(api):
@@ -69,69 +65,271 @@ def _get_bot_id(api):
     return result.get("result", {}).get("id")
 
 
-def _get_channel_status(api, channel_ref, bot_id):
+def _check_channel(api, channel, bot_id):
     """
-    Return real API status.
-    Unknown API results are kept unknown instead of being called inactive.
+    Check bot membership and permissions for one registered channel.
+
+    If the API cannot verify the status, return unknown instead of
+    incorrectly marking the channel inactive.
     """
     if not bot_id:
         return {
             "checkable": False,
             "member": None,
-            "admin": None,
+            "is_admin": None,
+            "permissions_ok": None,
             "active": None,
-            "title": None,
-            "chat_id": None,
-            "username": None,
+            "status": "اطلاعات ربات دریافت نشد",
         }
 
-    chat_result = api("getChat", {"chat_id": channel_ref})
-
-    if not chat_result or not chat_result.get("ok"):
-        return {
-            "checkable": False,
-            "member": None,
-            "admin": None,
-            "active": None,
-            "title": None,
-            "chat_id": None,
-            "username": None,
-        }
-
-    chat = chat_result.get("result", {})
-
-    member_result = api("getChatMember", {
-        "chat_id": chat.get("id"),
+    result = api("getChatMember", {
+        "chat_id": channel["chat_id"],
         "user_id": bot_id,
     })
 
-    if not member_result or not member_result.get("ok"):
+    if not result or not result.get("ok"):
         return {
             "checkable": False,
             "member": None,
-            "admin": None,
+            "is_admin": None,
+            "permissions_ok": None,
             "active": None,
-            "title": chat.get("title"),
-            "chat_id": chat.get("id"),
-            "username": chat.get("username"),
+            "status": "وضعیت قابل بررسی نیست",
         }
 
-    member = member_result.get("result", {})
+    member_info = result.get("result", {})
+    member_status = member_info.get("status")
+
+    is_member = member_status in (
+        "creator",
+        "owner",
+        "administrator",
+        "member",
+        "restricted",
+    )
+
+    is_admin = member_status in (
+        "creator",
+        "owner",
+        "administrator",
+    )
+
+    if not is_member:
+        return {
+            "checkable": True,
+            "member": False,
+            "is_admin": False,
+            "permissions_ok": False,
+            "active": False,
+            "status": "ربات عضو کانال نیست",
+        }
+
+    if not is_admin:
+        return {
+            "checkable": True,
+            "member": True,
+            "is_admin": False,
+            "permissions_ok": False,
+            "active": False,
+            "status": "ربات ادمین نیست",
+        }
+
+    # سازندهٔ کانال محدودیت دسترسی ادمین معمولی را ندارد.
+    if member_status in ("creator", "owner"):
+        permissions_ok = True
+    else:
+        required_permissions = (
+            "can_post_messages",
+            "can_edit_messages",
+            "can_delete_messages",
+        )
+
+        # اگر فیلدی صریحاً False باشد، دسترسی موردنیاز موجود نیست.
+        # اگر API فیلدی را نفرستاده باشد، آن را به‌تنهایی False فرض نمی‌کنیم.
+        permissions_ok = not any(
+            member_info.get(permission) is False
+            for permission in required_permissions
+        )
+
+    active = is_admin and permissions_ok
+
+    if active:
+        status_text = "فعال"
+    else:
+        status_text = "ادمین است، اما دسترسی لازم کامل نیست"
 
     return {
         "checkable": True,
-        "member": _is_member(member),
-        "admin": _is_admin(member),
-        "active": _has_required_permissions(member),
-        "title": chat.get("title"),
-        "chat_id": chat.get("id"),
-        "username": chat.get("username"),
+        "member": True,
+        "is_admin": True,
+        "permissions_ok": permissions_ok,
+        "active": active,
+        "status": status_text,
     }
 
 
-def _load_partner_channels():
+def _yes_no(value):
+    if value is True:
+        return "✅ بله"
+    if value is False:
+        return "❌ خیر"
+    return "⚠️ قابل بررسی نیست"
+
+
+def _channel_name(channel):
+    return (
+        channel.get("title")
+        or channel.get("username")
+        or str(channel.get("chat_id"))
+    )
+
+
+def _owner_name(channel):
+    username = channel.get("owner_username")
+
+    if username:
+        username = str(username).strip().lstrip("@")
+        if username:
+            return "@" + username
+
+    return str(channel.get("owner_id", "نامشخص"))
+
+
+def _make_summary(api, channels):
+    bot_id = _get_bot_id(api)
+
+    total = len(channels)
+    registered_members = 0
+    admin_channels = 0
+    active_channels = 0
+    unchecked_channels = 0
+
+    statuses = {}
+
+    for channel in channels:
+        check = _check_channel(api, channel, bot_id)
+        statuses[channel["id"]] = check
+
+        if not check["checkable"]:
+            unchecked_channels += 1
+            continue
+
+        if check["member"]:
+            registered_members += 1
+
+        if check["is_admin"]:
+            admin_channels += 1
+
+        if check["active"]:
+            active_channels += 1
+
+    return {
+        "total": total,
+        "members": registered_members,
+        "admins": admin_channels,
+        "active": active_channels,
+        "unchecked": unchecked_channels,
+        "statuses": statuses,
+    }
+
+
+def _stats_text(summary):
+    return (
+        "📊 آمار کانال‌های همکار\n\n"
+        f"📢 کل کانال‌های ثبت‌شده: {summary['total']}\n"
+        f"👤 ربات عضو کانال‌ها: {summary['members']}\n"
+        f"🛡️ ربات ادمین کانال‌ها: {summary['admins']}\n"
+        f"✅ کانال‌های فعال: {summary['active']}\n"
+        f"⚠️ کانال‌های بررسی‌نشده: {summary['unchecked']}\n\n"
+        "کانال فعال یعنی ربات ادمین باشد و دسترسی‌های لازم "
+        "برای ارسال، ویرایش و حذف پیام را داشته باشد.\n"
+        "برای دیدن جزئیات، یکی از کانال‌ها را انتخاب کن."
+    )
+
+
+def _list_keyboard(channels, page, statuses):
+    rows = []
+
+    start = page * PAGE_SIZE
+    end = start + PAGE_SIZE
+    page_channels = channels[start:end]
+
+    for channel in page_channels:
+        check = statuses.get(channel["id"], {})
+        active = check.get("active")
+
+        if active is True:
+            icon = "✅"
+        elif active is False:
+            icon = "❌"
+        else:
+            icon = "⚠️"
+
+        title = _channel_name(channel)
+        button_text = f"{icon} {title}"[:60]
+
+        rows.append([
+            _button(
+                button_text,
+                f"{_PREFIX}detail:{channel['id']}:{page}",
+            )
+        ])
+
+    navigation = []
+
+    if page > 0:
+        navigation.append(
+            _button("⬅️ صفحه قبل", f"{_PREFIX}list:{page - 1}")
+        )
+
+    if end < len(channels):
+        navigation.append(
+            _button("صفحه بعد ➡️", f"{_PREFIX}list:{page + 1}")
+        )
+
+    if navigation:
+        rows.append(navigation)
+
+    rows.append([
+        _button("🔄 به‌روزرسانی آمار", f"{_PREFIX}list:{page}")
+    ])
+
+    return _inline_keyboard(rows)
+
+
+def _show_list(chat_id, page, api, send_message):
+    channels = _get_channels()
+
+    if not channels:
+        _send(
+            send_message,
+            chat_id,
+            "📊 هنوز کانال همکاری ثبت نشده است.",
+            _inline_keyboard([
+                [_button("🔄 به‌روزرسانی", f"{_PREFIX}list:0")]
+            ]),
+        )
+        return
+
+    max_page = max(0, (len(channels) - 1) // PAGE_SIZE)
+    page = max(0, min(page, max_page))
+
+    summary = _make_summary(api, channels)
+
+    text = _stats_text(summary)
+    text += f"\n\nصفحه {page + 1} از {max_page + 1}"
+
+    _send(
+        send_message,
+        chat_id,
+        text,
+        _list_keyboard(channels, page, summary["statuses"]),
+    )
+
+
+def _show_detail(chat_id, channel_id, page, api, send_message):
     with get_connection() as conn:
-        rows = conn.execute("""
+        row = conn.execute("""
             SELECT
                 pc.id,
                 pc.owner_id,
@@ -140,277 +338,184 @@ def _load_partner_channels():
                 pc.title,
                 pc.status,
                 pc.created_at,
-                COALESCE(u.username, '') AS owner_username
+                u.username AS owner_username
             FROM partner_channels pc
-            LEFT JOIN users u ON u.user_id = pc.owner_id
-            ORDER BY pc.id DESC
-        """).fetchall()
+            LEFT JOIN users u
+                ON u.user_id = pc.owner_id
+            WHERE pc.id = ?
+              AND pc.status != 'deleted'
+            LIMIT 1
+        """, (channel_id,)).fetchone()
 
-    return [dict(row) for row in rows]
+    if not row:
+        _send(
+            send_message,
+            chat_id,
+            "❌ این کانال دیگر در فهرست کانال‌های همکار نیست.",
+            _inline_keyboard([
+                [_button("🔙 بازگشت به فهرست", f"{_PREFIX}list:{page}")]
+            ]),
+        )
+        return
 
-
-def _load_force_join_channels():
-    with get_connection() as conn:
-        rows = conn.execute("""
-            SELECT id, username, title
-            FROM force_join_channels
-            ORDER BY id
-        """).fetchall()
-
-    return [dict(row) for row in rows]
-
-
-def _registered_channel_refs():
-    """
-    Check channels already stored by the bot.
-    Bale's Bot API does not provide a complete list of every channel
-    the bot belongs to.
-    """
-    refs = {}
-
-    for channel in _load_partner_channels():
-        key = f"partner:{channel['id']}"
-        refs[key] = channel.get("chat_id")
-
-    for channel in _load_force_join_channels():
-        key = f"force_join:{channel['id']}"
-        refs[key] = f"@{channel['username']}"
-
-    return refs
-
-
-def _collect_statistics(api):
-    partners = _load_partner_channels()
-    registered_refs = _registered_channel_refs()
+    channel = dict(row)
     bot_id = _get_bot_id(api)
+    check = _check_channel(api, channel, bot_id)
 
-    member_count = 0
-    admin_count = 0
-    active_count = 0
-    unknown_count = 0
-
-    for channel_ref in registered_refs.values():
-        status = _get_channel_status(api, channel_ref, bot_id)
-
-        if not status["checkable"]:
-            unknown_count += 1
-            continue
-
-        if status["member"]:
-            member_count += 1
-
-        if status["admin"]:
-            admin_count += 1
-
-        if status["active"]:
-            active_count += 1
-
-    active_partner_count = sum(
-        1 for channel in partners
-        if channel.get("status") == "active"
+    saved_status = channel.get("status") or "نامشخص"
+    saved_status_text = (
+        "ثبت‌شده"
+        if saved_status == "active"
+        else saved_status
     )
+
+    channel_username = channel.get("username")
+    if channel_username:
+        channel_username = "@" + str(channel_username).lstrip("@")
+    else:
+        channel_username = "ندارد"
+
+    active_value = check.get("active")
+    if active_value is True:
+        active_text = "✅ فعال"
+    elif active_value is False:
+        active_text = "❌ غیرفعال"
+    else:
+        active_text = "⚠️ وضعیت قابل بررسی نیست"
 
     text = (
-        "📊 آمار کانال‌های ثبت‌شده\n\n"
-        f"🤝 کل کانال‌های همکار: {len(partners):,}\n"
-        f"✅ همکارهای فعال در دیتابیس: {active_partner_count:,}\n"
-        f"📋 کانال‌های جوین اجباری: "
-        f"{len(_load_force_join_channels()):,}\n\n"
-        "🔎 وضعیت واقعی ربات در کانال‌های ثبت‌شده:\n"
-        f"👤 عضو: {member_count:,}\n"
-        f"👮 ادمین: {admin_count:,}\n"
-        f"🟢 دارای دسترسی‌های لازم: {active_count:,}\n"
-        f"❔ قابل بررسی نبود: {unknown_count:,}\n\n"
-        "نکته: این آمار مربوط به کانال‌های ثبت‌شده در دیتابیس است، "
-        "نه تمام کانال‌هایی که ربات ممکن است در آن‌ها عضو باشد."
+        "📋 جزئیات کانال همکار\n\n"
+        f"📢 نام کانال: {_channel_name(channel)}\n"
+        f"🔗 یوزرنیم کانال: {channel_username}\n"
+        f"🆔 شناسه کانال: {channel['chat_id']}\n"
+        f"👤 صاحب کانال: {_owner_name(channel)}\n"
+        f"🆔 آیدی عددی صاحب کانال: {channel['owner_id']}\n\n"
+        f"📌 وضعیت ذخیره‌شده: {saved_status_text}\n"
+        f"👥 ربات عضو کانال است: {_yes_no(check.get('member'))}\n"
+        f"🛡️ ربات ادمین است: {_yes_no(check.get('is_admin'))}\n"
+        "🔑 دسترسی‌های لازم: "
+        f"{_yes_no(check.get('permissions_ok'))}\n"
+        f"📊 وضعیت نهایی: {active_text}\n"
+        f"🕒 تاریخ ثبت: {channel.get('created_at') or 'نامشخص'}\n"
     )
 
-    return text
-
-
-def _home_keyboard():
-    return _inline_keyboard([
-        [{"text": "🤝 فهرست کانال‌های همکار",
-          "callback_data": "acs:list:0"}],
-        [{"text": "🔒 فهرست جوین اجباری",
-          "callback_data": "acs:force:0"}],
-        [{"text": "🔄 به‌روزرسانی آمار",
-          "callback_data": "acs:home"}],
-        [{"text": "🔙 بازگشت به پنل",
-          "callback_data": "acs:panel"}],
-    ])
-
-
-def _list_keyboard(channels, page, category="partner"):
-    start = page * PAGE_SIZE
-    current = channels[start:start + PAGE_SIZE]
-    rows = []
-
-    for channel in current:
-        if category == "partner":
-            channel_id = channel["id"]
-            title = (
-                channel.get("title")
-                or channel.get("username")
-                or str(channel.get("chat_id"))
+    rows = [
+        [
+            _button(
+                "🗑 حذف از فهرست همکاران",
+                f"{_PREFIX}confirm_delete:{channel_id}:{page}",
             )
-            status = channel.get("status") or "نامشخص"
-            label = f"📢 {title} | {status}"
+        ],
+        [
+            _button("🔄 بررسی دوباره", f"{_PREFIX}detail:{channel_id}:{page}")
+        ],
+        [
+            _button("🔙 بازگشت به فهرست", f"{_PREFIX}list:{page}")
+        ],
+    ]
 
-            rows.append([{
-                "text": label[:60],
-                "callback_data": f"acs:detail:{channel_id}:{page}",
-            }])
-        else:
-            username = channel.get("username") or "بدون یوزرنیم"
-            title = channel.get("title") or username
-
-            rows.append([{
-                "text": f"🔒 {title} (@{username})"[:60],
-                "callback_data": f"acs:force_detail:{channel['id']}:{page}",
-            }])
-
-    nav = []
-
-    if page > 0:
-        nav.append({
-            "text": "⬅️ قبلی",
-            "callback_data": f"acs:{'list' if category == 'partner' else 'force'}:{page - 1}",
-        })
-
-    if start + PAGE_SIZE < len(channels):
-        nav.append({
-            "text": "بعدی ➡️",
-            "callback_data": f"acs:{'list' if category == 'partner' else 'force'}:{page + 1}",
-        })
-
-    if nav:
-        rows.append(nav)
-
-    rows.append([{
-        "text": "🔙 آمار کانال‌ها",
-        "callback_data": "acs:home",
-    }])
-
-    return _inline_keyboard(rows)
+    _send(send_message, chat_id, text, _inline_keyboard(rows))
 
 
-def _partner_detail(channel, api):
-    bot_id = _get_bot_id(api)
-    status = _get_channel_status(
-        api,
-        channel.get("chat_id"),
-        bot_id,
-    )
+def _confirm_delete(chat_id, channel_id, page, send_message):
+    with get_connection() as conn:
+        channel = conn.execute("""
+            SELECT id, title, username, chat_id, owner_id
+            FROM partner_channels
+            WHERE id = ?
+              AND status != 'deleted'
+            LIMIT 1
+        """, (channel_id,)).fetchone()
 
-    owner_username = (channel.get("owner_username") or "").strip()
+    if not channel:
+        _send(
+            send_message,
+            chat_id,
+            "❌ کانال پیدا نشد یا قبلاً از فهرست حذف شده است.",
+            _inline_keyboard([
+                [_button("🔙 بازگشت", f"{_PREFIX}list:{page}")]
+            ]),
+        )
+        return
 
-    if owner_username:
-        owner_text = f"@{owner_username.lstrip('@')}"
-    else:
-        owner_text = str(channel.get("owner_id"))
-
-    title = (
-        channel.get("title")
-        or channel.get("username")
-        or str(channel.get("chat_id"))
-    )
-
-    if not status["checkable"]:
-        member_text = "❔ قابل بررسی نیست"
-        admin_text = "❔ قابل بررسی نیست"
-        active_text = "❔ قابل بررسی نیست"
-    else:
-        member_text = "بله" if status["member"] else "خیر"
-        admin_text = "بله" if status["admin"] else "خیر"
-        active_text = "بله" if status["active"] else "خیر"
-
-    database_status = channel.get("status") or "نامشخص"
+    channel = dict(channel)
+    name = _channel_name(channel)
 
     text = (
-        f"📢 جزئیات کانال همکار\n\n"
-        f"🏷 نام: {title}\n"
-        f"🆔 آیدی کانال: {channel.get('chat_id')}\n"
-        f"👤 مالک: {owner_text}\n"
-        f"🆔 آیدی عددی مالک: {channel.get('owner_id')}\n"
-        f"📌 وضعیت ثبت در ربات: {database_status}\n\n"
-        "🔎 وضعیت واقعی ربات در کانال:\n"
-        f"👥 عضو کانال است: {member_text}\n"
-        f"👮 ادمین کانال است: {admin_text}\n"
-        f"🟢 مجوز ارسال، ویرایش و حذف دارد: {active_text}\n\n"
-        "وضعیت «فعال» در دیتابیس به‌تنهایی به معنی داشتن "
-        "دسترسی‌های لازم در حال حاضر نیست."
+        "⚠️ تأیید حذف کانال\n\n"
+        f"📢 کانال: {name}\n"
+        f"🆔 شناسه: {channel['chat_id']}\n\n"
+        "کانال از فهرست انتشار سفارش‌های همکار حذف می‌شود.\n"
+        "سوابق پاداش پاک نمی‌شوند. صاحب کانال می‌تواند بعداً "
+        "از مسیر عادی دوباره آن را ثبت کند.\n\n"
+        "حذف انجام شود؟"
     )
 
-    keyboard = _inline_keyboard([
-        [{
-            "text": "🗑 حذف از فهرست همکار",
-            "callback_data": f"acs:confirm_delete:{channel['id']}",
-        }],
-        [{
-            "text": "🔙 فهرست کانال‌های همکار",
-            "callback_data": "acs:list:0",
-        }],
-    ])
-
-    return text, keyboard
-
-
-def _force_join_detail(channel, api):
-    bot_id = _get_bot_id(api)
-    status = _get_channel_status(
-        api,
-        f"@{channel['username']}",
-        bot_id,
+    _send(
+        send_message,
+        chat_id,
+        text,
+        _inline_keyboard([
+            [
+                _button(
+                    "✅ بله، حذف شود",
+                    f"{_PREFIX}delete:{channel_id}:{page}",
+                ),
+                _button(
+                    "❌ انصراف",
+                    f"{_PREFIX}detail:{channel_id}:{page}",
+                ),
+            ]
+        ]),
     )
 
-    if not status["checkable"]:
-        member_text = "❔ قابل بررسی نیست"
-        admin_text = "❔ قابل بررسی نیست"
-        active_text = "❔ قابل بررسی نیست"
-    else:
-        member_text = "بله" if status["member"] else "خیر"
-        admin_text = "بله" if status["admin"] else "خیر"
-        active_text = "بله" if status["active"] else "خیر"
 
-    title = channel.get("title") or channel["username"]
+def _delete_channel(chat_id, channel_id, page, send_message):
+    with get_connection() as conn:
+        row = conn.execute("""
+            SELECT id, title, username, chat_id
+            FROM partner_channels
+            WHERE id = ?
+              AND status != 'deleted'
+            LIMIT 1
+        """, (channel_id,)).fetchone()
 
-    text = (
-        "🔒 جزئیات کانال جوین اجباری\n\n"
-        f"🏷 نام: {title}\n"
-        f"🔗 یوزرنیم: @{channel['username']}\n\n"
-        "🔎 وضعیت ربات:\n"
-        f"👥 عضو کانال است: {member_text}\n"
-        f"👮 ادمین کانال است: {admin_text}\n"
-        f"🟢 مجوزهای لازم را دارد: {active_text}"
+        if not row:
+            _send(
+                send_message,
+                chat_id,
+                "❌ این کانال قبلاً حذف شده یا پیدا نشد.",
+                _inline_keyboard([
+                    [_button("🔙 بازگشت", f"{_PREFIX}list:{page}")]
+                ]),
+            )
+            return
+
+        channel = dict(row)
+
+        # حذف نرم: سابقهٔ درآمد و پاداش‌ها حفظ می‌شود.
+        # چون انتشار فقط برای status='active' انجام می‌شود،
+        # از این به بعد سفارش جدیدی به این کانال نمی‌رود.
+        conn.execute("""
+            UPDATE partner_channels
+            SET status = 'deleted'
+            WHERE id = ?
+        """, (channel_id,))
+
+    _send(
+        send_message,
+        chat_id,
+        "✅ کانال از فهرست همکاران حذف شد.\n\n"
+        f"📢 کانال: {_channel_name(channel)}\n"
+        "سوابق پاداش حفظ شدند و صاحب کانال می‌تواند دوباره ثبتش کند.",
+        _inline_keyboard([
+            [_button("📋 بازگشت به فهرست", f"{_PREFIX}list:{page}")]
+        ]),
     )
-
-    keyboard = _inline_keyboard([
-        [{
-            "text": "🔙 فهرست جوین اجباری",
-            "callback_data": "acs:force:0",
-        }],
-    ])
-
-    return text, keyboard
-
-
-def _edit_or_send(api, send_message, chat_id, message_id, text, keyboard):
-    if message_id is not None:
-        result = api("editMessageText", {
-            "chat_id": chat_id,
-            "message_id": message_id,
-            "text": text,
-            "reply_markup": keyboard,
-        })
-
-        if result and result.get("ok"):
-            return result
-
-    return send_message(chat_id, text, keyboard)
 
 
 def handle_message(message, api, send_message):
+    """Handle the admin's channel statistics menu button."""
     user = message.get("from", {})
     chat = message.get("chat", {})
     text = (message.get("text") or "").strip()
@@ -421,67 +526,45 @@ def handle_message(message, api, send_message):
     if not user_id or not chat_id:
         return False
 
-    if not admin_panel.is_admin(user_id):
-        return False
-
     if chat.get("type") != "private":
         return False
 
     if text != BTN_CHANNEL_STATS:
         return False
 
-    stats_text = _collect_statistics(api)
-    send_message(chat_id, stats_text, _home_keyboard())
+    if not admin_panel.is_admin(user_id):
+        _send(send_message, chat_id, "⛔ این بخش فقط برای ادمین است.")
+        return True
+
+    _show_list(chat_id, 0, api, send_message)
     return True
 
 
-def _delete_partner_channel(channel_id):
-    """
-    Mirror the existing user-side channel removal behavior.
-    Reward/earning rows are removed before the partner channel row
-    to respect the database foreign keys.
-    """
-    with get_connection() as conn:
-        channel = conn.execute("""
-            SELECT id, owner_id, chat_id, title, username
-            FROM partner_channels
-            WHERE id = ?
-            LIMIT 1
-        """, (int(channel_id),)).fetchone()
-
-        if not channel:
-            return False, None
-
-        conn.execute("""
-            DELETE FROM partner_order_rewards
-            WHERE channel_id = ?
-        """, (channel_id,))
-
-        conn.execute("""
-            DELETE FROM partner_earnings
-            WHERE channel_id = ?
-        """, (channel_id,))
-
-        conn.execute("""
-            DELETE FROM partner_channels
-            WHERE id = ?
-        """, (channel_id,))
-
-    return True, dict(channel)
-
-
 def handle_callback(callback, api, send_message, answer_callback):
-    data = callback.get("data", "")
-    callback_id = callback.get("id")
-    user_id = callback.get("from", {}).get("id")
-    message = callback.get("message", {})
-    chat_id = message.get("chat", {}).get("id")
-    message_id = message.get("message_id")
+    """Handle inline buttons for channel statistics and management."""
+    data = callback.get("data") or ""
 
-    if not data.startswith("acs:"):
+    if not data.startswith(_PREFIX):
         return False
 
-    if not user_id or not admin_panel.is_admin(user_id):
+    user = callback.get("from", {})
+    user_id = user.get("id")
+    callback_id = callback.get("id")
+
+    message = callback.get("message", {})
+    chat = message.get("chat", {})
+    chat_id = chat.get("id")
+
+    if not user_id or not chat_id:
+        if callback_id:
+            answer_callback(
+                callback_id,
+                "❌ اطلاعات دکمه ناقص است.",
+                show_alert=True,
+            )
+        return True
+
+    if chat.get("type") != "private" or not admin_panel.is_admin(user_id):
         if callback_id:
             answer_callback(
                 callback_id,
@@ -490,235 +573,60 @@ def handle_callback(callback, api, send_message, answer_callback):
             )
         return True
 
-    if not chat_id:
-        if callback_id:
-            answer_callback(callback_id, "اطلاعات پیام دریافت نشد.")
-        return True
-
     if callback_id:
         answer_callback(callback_id)
 
-    if data == "acs:home":
-        _edit_or_send(
-            api,
-            send_message,
-            chat_id,
-            message_id,
-            _collect_statistics(api),
-            _home_keyboard(),
-        )
-        return True
+    parts = data.split(":")
 
-    if data == "acs:panel":
-        keyboard = admin_panel.panel_keyboard()
-        keyboard["keyboard"].append([{"text": BTN_CHANNEL_STATS}])
-        send_message(chat_id, "🛠 پنل مدیریت ربات", keyboard)
-        return True
+    try:
+        action = parts[1]
 
-    if data.startswith("acs:list:"):
-        try:
-            page = max(0, int(data.split(":")[2]))
-        except (IndexError, ValueError):
-            page = 0
-
-        channels = _load_partner_channels()
-        text = (
-            f"🤝 فهرست کانال‌های همکار\n"
-            f"تعداد ثبت‌شده: {len(channels):,}\n\n"
-            "برای مشاهده جزئیات، یک کانال را انتخاب کن."
-        )
-
-        _edit_or_send(
-            api,
-            send_message,
-            chat_id,
-            message_id,
-            text,
-            _list_keyboard(channels, page, "partner"),
-        )
-        return True
-
-    if data.startswith("acs:force:"):
-        try:
-            page = max(0, int(data.split(":")[2]))
-        except (IndexError, ValueError):
-            page = 0
-
-        channels = _load_force_join_channels()
-        text = (
-            f"🔒 فهرست کانال‌های جوین اجباری\n"
-            f"تعداد ثبت‌شده: {len(channels):,}\n\n"
-            "برای مشاهده جزئیات، یک کانال را انتخاب کن."
-        )
-
-        _edit_or_send(
-            api,
-            send_message,
-            chat_id,
-            message_id,
-            text,
-            _list_keyboard(channels, page, "force"),
-        )
-        return True
-
-    if data.startswith("acs:detail:"):
-        try:
-            _, _, _, channel_id, page = data.split(":")
-            channel_id = int(channel_id)
-            page = max(0, int(page))
-        except (ValueError, TypeError):
-            if callback_id:
-                answer_callback(
-                    callback_id,
-                    "اطلاعات کانال نامعتبر است.",
-                    show_alert=True,
-                )
+        if action == "list" and len(parts) == 3:
+            page = int(parts[2])
+            _show_list(chat_id, page, api, send_message)
             return True
 
-        channels = _load_partner_channels()
-        channel = next(
-            (item for item in channels if item["id"] == channel_id),
-            None,
-        )
-
-        if not channel:
-            _edit_or_send(
+        if action == "detail" and len(parts) == 4:
+            channel_id = int(parts[2])
+            page = int(parts[3])
+            _show_detail(
+                chat_id,
+                channel_id,
+                page,
                 api,
                 send_message,
-                chat_id,
-                message_id,
-                "❌ این کانال دیگر در فهرست وجود ندارد.",
-                _list_keyboard(channels, page, "partner"),
             )
             return True
 
-        detail_text, keyboard = _partner_detail(channel, api)
-        _edit_or_send(
-            api,
-            send_message,
-            chat_id,
-            message_id,
-            detail_text,
-            keyboard,
-        )
-        return True
-
-    if data.startswith("acs:force_detail:"):
-        try:
-            _, _, _, channel_id, page = data.split(":")
-            channel_id = int(channel_id)
-            page = max(0, int(page))
-        except (ValueError, TypeError):
-            return True
-
-        channels = _load_force_join_channels()
-        channel = next(
-            (item for item in channels if item["id"] == channel_id),
-            None,
-        )
-
-        if not channel:
-            _edit_or_send(
-                api,
+        if action == "confirm_delete" and len(parts) == 4:
+            channel_id = int(parts[2])
+            page = int(parts[3])
+            _confirm_delete(
+                chat_id,
+                channel_id,
+                page,
                 send_message,
-                chat_id,
-                message_id,
-                "❌ این کانال دیگر در فهرست نیست.",
-                _list_keyboard(channels, page, "force"),
             )
             return True
 
-        detail_text, keyboard = _force_join_detail(channel, api)
-        _edit_or_send(
-            api,
-            send_message,
-            chat_id,
-            message_id,
-            detail_text,
-            keyboard,
-        )
-        return True
-
-    if data.startswith("acs:confirm_delete:"):
-        try:
-            channel_id = int(data.split(":")[2])
-        except (IndexError, ValueError):
-            return True
-
-        channels = _load_partner_channels()
-        channel = next(
-            (item for item in channels if item["id"] == channel_id),
-            None,
-        )
-
-        if not channel:
-            _edit_or_send(
-                api,
+        if action == "delete" and len(parts) == 4:
+            channel_id = int(parts[2])
+            page = int(parts[3])
+            _delete_channel(
+                chat_id,
+                channel_id,
+                page,
                 send_message,
-                chat_id,
-                message_id,
-                "❌ این کانال قبلاً حذف شده است.",
-                _list_keyboard(channels, 0, "partner"),
             )
             return True
 
-        title = (
-            channel.get("title")
-            or channel.get("username")
-            or str(channel.get("chat_id"))
-        )
-
-        keyboard = _inline_keyboard([
-            [{
-                "text": "✅ بله، حذف شود",
-                "callback_data": f"acs:delete:{channel_id}",
-            }],
-            [{
-                "text": "❌ انصراف",
-                "callback_data": "acs:list:0",
-            }],
-        ])
-
-        _edit_or_send(
-            api,
-            send_message,
-            chat_id,
-            message_id,
-            f"⚠️ حذف کانال از فهرست همکار؟\n\n"
-            f"📢 {title}\n\n"
-            "با حذف، این کانال دیگر سفارش جدید دریافت نمی‌کند. "
-            "سوابق درآمد و پاداش ذخیره‌شده در جداول مربوط به کانال "
-            "نیز مانند حذف از منوی کاربر پاک می‌شود.",
-            keyboard,
-        )
-        return True
-
-    if data.startswith("acs:delete:"):
-        try:
-            channel_id = int(data.split(":")[2])
-        except (IndexError, ValueError):
-            return True
-
-        deleted, channel = _delete_partner_channel(channel_id)
-        channels = _load_partner_channels()
-
-        if deleted:
-            text = (
-                "✅ کانال از فهرست همکار حذف شد.\n\n"
-                "مالک می‌تواند دوباره از بخش «📢 کانال همکار» "
-                "آن را ثبت کند."
+    except (TypeError, ValueError, IndexError):
+        if callback_id:
+            answer_callback(
+                callback_id,
+                "❌ اطلاعات دکمه نامعتبر است.",
+                show_alert=True,
             )
-        else:
-            text = "❌ کانال پیدا نشد یا قبلاً حذف شده است."
-
-        _edit_or_send(
-            api,
-            send_message,
-            chat_id,
-            message_id,
-            text,
-            _list_keyboard(channels, 0, "partner"),
-        )
         return True
 
     return True
