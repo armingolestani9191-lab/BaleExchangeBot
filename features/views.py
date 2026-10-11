@@ -1,8 +1,8 @@
-
 import json
 
 from database import get_connection
 from config import ORDER_CHANNEL, ADMIN_ID
+from features import partner_publisher
 
 
 MAX_ORDER_COUNT = 10000
@@ -259,18 +259,25 @@ def handle_message(message, api, send_message):
             order_id = cursor.lastrowid
             conn.commit()
 
-        # فوروارد واقعی پیام اصلی کاربر به کانال سفارش‌ها
-        forwarded = api(
-            "forwardMessage",
-            {
-                "chat_id": ORDER_CHANNEL,
-                "from_chat_id": payload["source_chat_id"],
-                "message_id": payload["source_message_id"]
-            }
+        # انتشار سفارش در کانال اصلی و کانال‌های همکار
+        published = partner_publisher.publish_order(
+            api=api,
+            order_id=order_id,
+            source_chat_id=payload["source_chat_id"],
+            source_message_id=payload["source_message_id"],
+            info_text=(
+                f"📋 **سفارش سین**\n\n"
+                f"👤 سین درخواستی: {target_count}\n"
+                f"👁️ سین خورده: 0\n"
+                f"#{order_id}"
+            ),
+            reply_markup=order_keyboard(order_id),
+            main_channel_id=ORDER_CHANNEL,
+            order_type="views"
         )
 
-        # اگر فوروارد ناموفق بود، پول کاربر برگردد
-        if not forwarded.get("ok"):
+        # در صورت ناموفق‌بودن انتشار اصلی، سفارش لغو و سکه‌ها برگردانده شوند
+        if not published or not published.get("ok"):
             with get_connection() as conn:
                 conn.execute("BEGIN IMMEDIATE")
 
@@ -294,16 +301,15 @@ def handle_message(message, api, send_message):
 
             send_message(
                 chat_id,
-                "❌ فوروارد پست به کانال ناموفق بود.\n"
+                "❌ انتشار سفارش در کانال ناموفق بود.\n"
                 "سکه‌های سفارش به حسابت برگردونده شدن."
             )
             return True
 
-        channel_message_id = (
-            forwarded.get("result", {}).get("message_id")
-        )
+        channel_message_id = published.get("channel_message_id")
+        info_message_id = published.get("info_message_id")
 
-        if not channel_message_id:
+        if not channel_message_id or not info_message_id:
             with get_connection() as conn:
                 conn.execute("BEGIN IMMEDIATE")
 
@@ -327,70 +333,12 @@ def handle_message(message, api, send_message):
 
             send_message(
                 chat_id,
-                "❌ شناسهٔ پیام فورواردشده دریافت نشد.\n"
+                "❌ اطلاعات پیام سفارش دریافت نشد.\n"
                 "سکه‌های سفارش به حسابت برگردونده شدن."
             )
             return True
 
-        # پیام اطلاعات سفارش؛ جدا از پست فورواردشده
-        info_text = (
-            f"📋 **سفارش سین**\n\n"
-            f"👤 سین درخواستی: {target_count}\n"
-            f"👁️ سین خورده: 0\n"
-            f"#{order_id}"
-        )
-
-        info_result = api(
-            "sendMessage",
-            {
-                "chat_id": ORDER_CHANNEL,
-                "text": info_text,
-                "reply_to_message_id": channel_message_id,
-                "reply_markup": order_keyboard(order_id)
-            }
-        )
-
-        if not info_result.get("ok"):
-            api(
-                "deleteMessage",
-                {
-                    "chat_id": ORDER_CHANNEL,
-                    "message_id": channel_message_id
-                }
-            )
-
-            with get_connection() as conn:
-                conn.execute("BEGIN IMMEDIATE")
-
-                conn.execute(
-                    """
-                    UPDATE users
-                    SET coins = coins + ?
-                    WHERE user_id = ?
-                    """,
-                    (total_cost, user_id)
-                )
-
-                conn.execute(
-                    "DELETE FROM orders WHERE id = ?",
-                    (order_id,)
-                )
-
-                conn.commit()
-
-            clear_state(user_id)
-
-            send_message(
-                chat_id,
-                "❌ ارسال پیام دکمه‌های سفارش ناموفق بود.\n"
-                "سکه‌های سفارش به حسابت برگردونده شدن."
-            )
-            return True
-
-        info_message_id = (
-            info_result.get("result", {}).get("message_id")
-        )
-
+        # ذخیره شناسه پیام‌های کانال اصلی در جدول سفارش؛ مانند قبل
         with get_connection() as conn:
             conn.execute(
                 """
@@ -550,25 +498,52 @@ def handle_callback_query(callback, api, send_message):
             "🎉 یک سکه به حسابت اضافه شد!"
         )
 
-        # وقتی سفارش کامل شد، پیام‌های کانال حذف می‌شوند
-        if completed:
-            if channel_message_id:
-                api(
-                    "deleteMessage",
-                    {
-                        "chat_id": ORDER_CHANNEL,
-                        "message_id": channel_message_id
-                    }
-                )
+        # پیام‌های سفارش ذخیره‌شده در کانال اصلی و کانال‌های همکار
+        saved_messages = partner_publisher.get_order_messages(order_id)
 
-            if info_message_id:
-                api(
-                    "deleteMessage",
-                    {
-                        "chat_id": ORDER_CHANNEL,
-                        "message_id": info_message_id
-                    }
-                )
+        if completed:
+            if saved_messages:
+                # حذف پست و پیام اطلاعات از تمام کانال‌هایی که سفارش در آن‌ها منتشر شده
+                for saved in saved_messages:
+                    if saved.get("post_message_id"):
+                        api(
+                            "deleteMessage",
+                            {
+                                "chat_id": saved["channel_id"],
+                                "message_id": saved["post_message_id"]
+                            }
+                        )
+
+                    if saved.get("info_message_id"):
+                        api(
+                            "deleteMessage",
+                            {
+                                "chat_id": saved["channel_id"],
+                                "message_id": saved["info_message_id"]
+                            }
+                        )
+
+                partner_publisher.delete_order_messages(order_id)
+
+            else:
+                # سازگاری با سفارش‌های قدیمی که اطلاعات کانال همکار ندارند
+                if channel_message_id:
+                    api(
+                        "deleteMessage",
+                        {
+                            "chat_id": ORDER_CHANNEL,
+                            "message_id": channel_message_id
+                        }
+                    )
+
+                if info_message_id:
+                    api(
+                        "deleteMessage",
+                        {
+                            "chat_id": ORDER_CHANNEL,
+                            "message_id": info_message_id
+                        }
+                    )
 
             # پیام جدید برای صاحب سفارش
             send_message(
@@ -585,7 +560,22 @@ def handle_callback_query(callback, api, send_message):
                 f"#{order_id}"
             )
 
-            if info_message_id:
+            if saved_messages:
+                # به‌روزرسانی شمارنده در تمام کانال‌ها
+                for saved in saved_messages:
+                    if saved.get("info_message_id"):
+                        api(
+                            "editMessageText",
+                            {
+                                "chat_id": saved["channel_id"],
+                                "message_id": saved["info_message_id"],
+                                "text": new_info_text,
+                                "reply_markup": order_keyboard(order_id)
+                            }
+                        )
+
+            elif info_message_id:
+                # رفتار قبلی برای سفارش‌هایی که در جدول جدید ثبت نشده‌اند
                 api(
                     "editMessageText",
                     {
