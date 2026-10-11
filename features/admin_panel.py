@@ -21,6 +21,7 @@ BTN_BROADCAST_CHANNEL = "📢 همگانی در کانال"
 
 BTN_USER_STATS = "👥 آمار کاربران"
 BTN_ORDER_STATS = "📊 آمار کلی سفارش‌ها"
+BTN_CHANNEL_STATS = "📊 آمار و وضعیت کانال‌ها"
 
 BTN_ADMINS = "👮 ادمین‌ها"
 BTN_ADD_ADMIN = "➕ افزودن ادمین"
@@ -145,6 +146,7 @@ def panel_keyboard():
     return {
         "keyboard": [
             [{"text": BTN_JOIN}],
+            [{"text": BTN_CHANNEL_STATS}],
             [{"text": BTN_BROADCAST_USERS}],
             [{"text": BTN_BROADCAST_CHANNEL}],
             [{"text": BTN_USER_STATS}, {"text": BTN_ORDER_STATS}],
