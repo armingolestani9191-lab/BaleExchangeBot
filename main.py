@@ -117,7 +117,8 @@ def main_menu(user_id=None):
             {"text": "🛡️ ممبر تضمینی"}
         ],
         [
-            {"text": "📢 کانال همکار"}
+            # باید دقیقاً با BTN_PARTNER در partner_channels.py یکی باشد.
+            {"text": "📢 افزودن کانال"}
         ],
         [
             {"text": "📖 راهنما"}
