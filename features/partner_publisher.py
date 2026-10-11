@@ -1,12 +1,11 @@
+
 from concurrent.futures import ThreadPoolExecutor
 
 from database import get_connection
 
 
 # استخر مشترک برای ویرایش و حذف هم‌زمان پیام‌ها
-# به‌جای ساخت استخر جدید در هر درخواست، از همین استخر استفاده می‌شود.
 _MESSAGE_POOL = ThreadPoolExecutor(max_workers=12)
-
 
 # پاداش صاحب کانال به ازای هر سفارش منتشرشده
 PARTNER_REWARD_PER_ORDER = 5
@@ -63,7 +62,7 @@ def save_order_message(
     info_message_id,
     order_type="views",
 ):
-    """ذخیرهٔ شناسهٔ هر دو پیام سفارش در یک کانال."""
+    """ذخیره شناسه هر دو پیام سفارش در یک کانال."""
     with get_connection() as conn:
         conn.execute("""
             INSERT INTO order_channel_messages (
@@ -89,7 +88,7 @@ def save_order_message(
 
 
 def get_order_messages(order_id):
-    """گرفتن پیام‌های ثبت‌شدهٔ یک سفارش از تمام کانال‌ها."""
+    """گرفتن پیام‌های ثبت‌شده یک سفارش از تمام کانال‌ها."""
     with get_connection() as conn:
         rows = conn.execute("""
             SELECT
@@ -114,15 +113,23 @@ def delete_order_messages(order_id):
         """, (order_id,))
 
 
-def reward_partner_channel(channel_chat_id, order_type, order_id):
+def reward_partner_channel(
+    channel_chat_id,
+    order_type,
+    order_id,
+    api=None,
+):
     """
-    دادن ۵ سکه به صاحب کانال فعال.
-    برای هر سفارش و هر کانال فقط یک‌بار پاداش ثبت می‌شود.
+    افزودن ۵ سکه به حساب صاحب کانال همکار.
+    فقط برای پاداش جدید، پیام خصوصی ارسال می‌شود.
     """
     try:
         channel_chat_id = int(channel_chat_id)
     except (TypeError, ValueError):
         return False
+
+    owner_id = None
+    reward_amount = PARTNER_REWARD_PER_ORDER
 
     with get_connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
@@ -139,6 +146,8 @@ def reward_partner_channel(channel_chat_id, order_type, order_id):
             conn.commit()
             return False
 
+        owner_id = channel["owner_id"]
+
         result = conn.execute("""
             INSERT OR IGNORE INTO partner_order_rewards (
                 channel_id,
@@ -151,9 +160,10 @@ def reward_partner_channel(channel_chat_id, order_type, order_id):
             channel["id"],
             order_type,
             order_id,
-            PARTNER_REWARD_PER_ORDER,
+            reward_amount,
         ))
 
+        # پاداش تکراری نباید دوباره ثبت شود.
         if result.rowcount != 1:
             conn.commit()
             return False
@@ -161,18 +171,51 @@ def reward_partner_channel(channel_chat_id, order_type, order_id):
         conn.execute("""
             INSERT OR IGNORE INTO users (user_id, coins)
             VALUES (?, 0)
-        """, (channel["owner_id"],))
+        """, (owner_id,))
 
         conn.execute("""
             UPDATE users
             SET coins = coins + ?
             WHERE user_id = ?
         """, (
-            PARTNER_REWARD_PER_ORDER,
-            channel["owner_id"],
+            reward_amount,
+            owner_id,
         ))
 
         conn.commit()
+
+    # اطلاع‌رسانی خصوصی فقط به صاحب کانال
+    if api and owner_id:
+        text = (
+            "🎉 پاداش انتشار پست به حساب شما اضافه شد!\n\n"
+            "سلام دوست عزیز 🌹\n"
+            "از همکاری شما با کانال‌های همکار ما ممنونیم.\n\n"
+            "📢 بابت انتشار موفق یک سفارش در کانال شما، "
+            f"{reward_amount} سکه به حساب شما اضافه شد.\n\n"
+            f"💰 مقدار پاداش: {reward_amount} سکه\n"
+            "✅ وضعیت: با موفقیت واریز شد\n\n"
+            "از همراهی شما سپاسگزاریم ❤️"
+        )
+
+        try:
+            response = api("sendMessage", {
+                "chat_id": owner_id,
+                "text": text,
+            })
+
+            if not response or not response.get("ok"):
+                print(
+                    "Partner publisher: owner reward notification failed:",
+                    owner_id,
+                    response,
+                )
+
+        except Exception as error:
+            print(
+                "Partner publisher: owner notification exception:",
+                owner_id,
+                repr(error),
+            )
 
     return True
 
@@ -188,7 +231,7 @@ def publish_order(
     order_type="views",
 ):
     """
-    انتشار سفارش در کانال اصلی و کانال‌های همکار فعال.
+    انتشار سفارش سین در کانال اصلی و کانال‌های همکار.
     پست منبع با forwardMessage ارسال می‌شود.
     """
 
@@ -312,6 +355,7 @@ def publish_order(
                 partner_chat_id,
                 order_type,
                 order_id,
+                api=api,
             )
 
         except Exception as error:
@@ -333,7 +377,7 @@ def publish_order(
 # ==========================================
 
 def _init_text_order_table():
-    """جدول مستقل برای سفارش‌های ممبر؛ بدون تداخل با سفارش‌های سین."""
+    """جدول مستقل برای سفارش‌های ممبر."""
     with get_connection() as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS text_order_channel_messages (
@@ -413,10 +457,7 @@ def publish_text_order(
     main_channel_id,
     order_type,
 ):
-    """
-    انتشار پیام متنی سفارش در کانال اصلی و کانال‌های همکار فعال.
-    شناسه پیام هر کانال در جدول جداگانه ذخیره می‌شود.
-    """
+    """انتشار سفارش متنی در کانال اصلی و کانال‌های همکار."""
     _init_text_order_table()
 
     main_result = api("sendMessage", {
@@ -490,6 +531,7 @@ def publish_text_order(
                 partner_chat_id,
                 order_type,
                 order_id,
+                api=api,
             )
 
         except Exception as error:
@@ -499,7 +541,6 @@ def publish_text_order(
                 repr(error),
             )
 
-    # result برای سازگاری با کد فعلی سفارش‌ها حفظ شده است.
     return {
         "ok": True,
         "result": {"message_id": main_message_id},
@@ -529,7 +570,6 @@ def edit_text_order_messages(
             "reply_markup": reply_markup,
         })
 
-    # استفاده از استخر مشترک، بدون ساخت ThreadPoolExecutor جدید
     futures = [
         _MESSAGE_POOL.submit(edit_one, item)
         for item in messages
@@ -541,7 +581,10 @@ def edit_text_order_messages(
             results.append(future.result())
         except Exception as error:
             results.append(None)
-            print("Partner publisher: text order edit exception:", repr(error))
+            print(
+                "Partner publisher: text order edit exception:",
+                repr(error),
+            )
 
     for item, result in zip(messages, results):
         if not result or not result.get("ok"):
@@ -567,7 +610,6 @@ def delete_text_order_messages(api, order_id, order_type):
             "message_id": item["info_message_id"],
         })
 
-    # استفاده از استخر مشترک، بدون ساخت ThreadPoolExecutor جدید
     futures = [
         _MESSAGE_POOL.submit(delete_one, item)
         for item in messages
@@ -579,7 +621,10 @@ def delete_text_order_messages(api, order_id, order_type):
             results.append(future.result())
         except Exception as error:
             results.append(None)
-            print("Partner publisher: text order delete exception:", repr(error))
+            print(
+                "Partner publisher: text order delete exception:",
+                repr(error),
+            )
 
     for item, result in zip(messages, results):
         if not result or not result.get("ok"):
