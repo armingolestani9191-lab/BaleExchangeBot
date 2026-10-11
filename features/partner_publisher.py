@@ -17,9 +17,7 @@ def init_tables():
                 info_message_id INTEGER,
                 order_type TEXT NOT NULL DEFAULT 'views',
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
                 UNIQUE(order_id, channel_id),
-
                 FOREIGN KEY (order_id)
                     REFERENCES orders(id)
                     ON DELETE CASCADE
@@ -39,9 +37,7 @@ def init_tables():
                 order_id INTEGER NOT NULL,
                 amount INTEGER NOT NULL DEFAULT 5,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
                 UNIQUE(channel_id, order_type, order_id),
-
                 FOREIGN KEY (channel_id)
                     REFERENCES partner_channels(id)
             )
@@ -71,7 +67,6 @@ def save_order_message(
                 order_type
             )
             VALUES (?, ?, ?, ?, ?)
-
             ON CONFLICT(order_id, channel_id)
             DO UPDATE SET
                 post_message_id = excluded.post_message_id,
@@ -137,8 +132,6 @@ def reward_partner_channel(channel_chat_id, order_type, order_id):
             conn.commit()
             return False
 
-        # ابتدا رکورد پاداش ثبت می‌شود؛ محدودیت UNIQUE
-        # جلوی پرداخت دوباره برای همین سفارش را می‌گیرد.
         result = conn.execute("""
             INSERT OR IGNORE INTO partner_order_rewards (
                 channel_id,
@@ -158,7 +151,6 @@ def reward_partner_channel(channel_chat_id, order_type, order_id):
             conn.commit()
             return False
 
-        # مطمئن شو صاحب کانال در جدول کاربران وجود دارد.
         conn.execute("""
             INSERT OR IGNORE INTO users (user_id, coins)
             VALUES (?, 0)
@@ -190,12 +182,9 @@ def publish_order(
 ):
     """
     انتشار سفارش در کانال اصلی و کانال‌های همکار فعال.
-
-    پست اصلی و پست‌های همکار با forwardMessage منتشر می‌شوند
-    تا حالت فوروارد پیام اصلی حفظ شود.
+    پست منبع با forwardMessage ارسال می‌شود.
     """
 
-    # ۱. فوروارد پست به کانال اصلی
     main_post = api("forwardMessage", {
         "chat_id": main_channel_id,
         "from_chat_id": source_chat_id,
@@ -211,7 +200,6 @@ def publish_order(
     if not main_post_id:
         return {"ok": False}
 
-    # ۲. انتشار پیام اطلاعات و دکمه‌های سفارش در کانال اصلی
     main_info = api("sendMessage", {
         "chat_id": main_channel_id,
         "text": info_text,
@@ -233,7 +221,6 @@ def publish_order(
         print("Partner publisher: main info failed:", main_info)
         return {"ok": False}
 
-    # ۳. ذخیره پیام‌های کانال اصلی
     save_order_message(
         order_id,
         main_channel_id,
@@ -242,7 +229,6 @@ def publish_order(
         order_type,
     )
 
-    # ۴. دریافت کانال‌های همکار فعال
     with get_connection() as conn:
         partners = conn.execute("""
             SELECT chat_id
@@ -250,22 +236,16 @@ def publish_order(
             WHERE status = 'active'
         """).fetchall()
 
-    # ۵. انتشار در کانال‌های همکار
     for partner in partners:
         partner_chat_id = partner["chat_id"]
 
-        # اگر شناسه کانال اصلی عددی باشد، از انتشار تکراری جلوگیری کن.
         try:
             if int(partner_chat_id) == int(main_channel_id):
                 continue
         except (TypeError, ValueError):
-            # ممکن است شناسه کانال اصلی به‌شکل @username باشد.
             pass
 
         try:
-            # نکته مهم:
-            # از forwardMessage استفاده می‌کنیم، نه copyMessage.
-            # منبع همان پیام اصلی کاربر است تا سربرگ فوروارد حفظ شود.
             partner_post = api("forwardMessage", {
                 "chat_id": partner_chat_id,
                 "from_chat_id": source_chat_id,
@@ -287,7 +267,6 @@ def publish_order(
             if not partner_post_id:
                 continue
 
-            # پیام اطلاعات و دکمه‌های سفارش زیر پست فورواردشده
             partner_info = api("sendMessage", {
                 "chat_id": partner_chat_id,
                 "text": info_text,
@@ -302,7 +281,6 @@ def publish_order(
             )
 
             if not partner_info_id:
-                # اگر پیام اطلاعات ارسال نشد، پست ناقص را حذف کن.
                 api("deleteMessage", {
                     "chat_id": partner_chat_id,
                     "message_id": partner_post_id,
@@ -315,7 +293,6 @@ def publish_order(
                 )
                 continue
 
-            # ذخیره شناسه هر دو پیام برای به‌روزرسانی و حذف بعدی
             save_order_message(
                 order_id,
                 partner_chat_id,
@@ -324,7 +301,6 @@ def publish_order(
                 order_type,
             )
 
-            # پاداش فقط پس از ارسال موفق پست و پیام اطلاعات
             reward_partner_channel(
                 partner_chat_id,
                 order_type,
@@ -343,3 +319,260 @@ def publish_order(
         "channel_message_id": main_post_id,
         "info_message_id": main_info_id,
     }
+
+
+# ==========================================
+# انتشار سفارش‌های متنی ممبر
+# ==========================================
+
+def _init_text_order_table():
+    """جدول مستقل برای سفارش‌های ممبر؛ بدون تداخل با سفارش‌های سین."""
+    with get_connection() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS text_order_channel_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                order_type TEXT NOT NULL,
+                order_id INTEGER NOT NULL,
+                channel_id TEXT NOT NULL,
+                info_message_id INTEGER NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(order_type, order_id, channel_id)
+            )
+        """)
+
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_text_order_channel_messages_order
+            ON text_order_channel_messages(order_type, order_id)
+        """)
+
+
+def _save_text_order_message(
+    order_type,
+    order_id,
+    channel_id,
+    message_id,
+):
+    with get_connection() as conn:
+        conn.execute("""
+            INSERT INTO text_order_channel_messages (
+                order_type,
+                order_id,
+                channel_id,
+                info_message_id
+            )
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(order_type, order_id, channel_id)
+            DO UPDATE SET
+                info_message_id = excluded.info_message_id
+        """, (
+            order_type,
+            order_id,
+            str(channel_id),
+            message_id,
+        ))
+
+
+def _get_text_order_messages(order_type, order_id):
+    with get_connection() as conn:
+        rows = conn.execute("""
+            SELECT channel_id, info_message_id
+            FROM text_order_channel_messages
+            WHERE order_type = ?
+              AND order_id = ?
+            ORDER BY id
+        """, (order_type, order_id)).fetchall()
+
+    return [dict(row) for row in rows]
+
+
+def _same_channel(first, second):
+    first_text = str(first or "").strip().lower()
+    second_text = str(second or "").strip().lower()
+
+    if first_text.lstrip("@") == second_text.lstrip("@"):
+        return True
+
+    try:
+        return int(first_text) == int(second_text)
+    except (TypeError, ValueError):
+        return False
+
+
+def publish_text_order(
+    api,
+    order_id,
+    info_text,
+    reply_markup,
+    main_channel_id,
+    order_type,
+):
+    """
+    انتشار پیام متنی سفارش در کانال اصلی و کانال‌های همکار فعال.
+    شناسه پیام هر کانال در جدول جداگانه ذخیره می‌شود.
+    """
+    _init_text_order_table()
+
+    main_result = api("sendMessage", {
+        "chat_id": main_channel_id,
+        "text": info_text,
+        "reply_markup": reply_markup,
+    })
+
+    if not main_result or not main_result.get("ok"):
+        print(
+            "Partner publisher: main text order failed:",
+            main_result,
+        )
+        return {"ok": False}
+
+    main_message_id = main_result.get("result", {}).get("message_id")
+
+    if not main_message_id:
+        return {"ok": False}
+
+    _save_text_order_message(
+        order_type,
+        order_id,
+        main_channel_id,
+        main_message_id,
+    )
+
+    with get_connection() as conn:
+        partners = conn.execute("""
+            SELECT chat_id
+            FROM partner_channels
+            WHERE status = 'active'
+        """).fetchall()
+
+    for partner in partners:
+        partner_chat_id = partner["chat_id"]
+
+        if _same_channel(partner_chat_id, main_channel_id):
+            continue
+
+        try:
+            result = api("sendMessage", {
+                "chat_id": partner_chat_id,
+                "text": info_text,
+                "reply_markup": reply_markup,
+            })
+
+            if not result or not result.get("ok"):
+                print(
+                    "Partner publisher: text order send failed:",
+                    partner_chat_id,
+                    result,
+                )
+                continue
+
+            partner_message_id = (
+                result.get("result", {}).get("message_id")
+            )
+
+            if not partner_message_id:
+                continue
+
+            _save_text_order_message(
+                order_type,
+                order_id,
+                partner_chat_id,
+                partner_message_id,
+            )
+
+            reward_partner_channel(
+                partner_chat_id,
+                order_type,
+                order_id,
+            )
+
+        except Exception as error:
+            print(
+                "Partner publisher: text order channel error:",
+                partner_chat_id,
+                repr(error),
+            )
+
+    # result برای سازگاری با کد فعلی سفارش‌ها حفظ شده است.
+    return {
+        "ok": True,
+        "result": {"message_id": main_message_id},
+        "channel_message_id": main_message_id,
+        "info_message_id": main_message_id,
+    }
+
+
+def edit_text_order_messages(
+    api,
+    order_id,
+    order_type,
+    text,
+    reply_markup,
+):
+    """ویرایش پیام سفارش در تمام کانال‌های منتشرشده."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    messages = _get_text_order_messages(order_type, order_id)
+
+    if not messages:
+        return 0
+
+    def edit_one(item):
+        return api("editMessageText", {
+            "chat_id": item["channel_id"],
+            "message_id": item["info_message_id"],
+            "text": text,
+            "reply_markup": reply_markup,
+        })
+
+    with ThreadPoolExecutor(
+        max_workers=min(12, max(1, len(messages)))
+    ) as pool:
+        results = list(pool.map(edit_one, messages))
+
+    for item, result in zip(messages, results):
+        if not result or not result.get("ok"):
+            print(
+                "Partner publisher: text order edit failed:",
+                item["channel_id"],
+                result,
+            )
+
+    return len(messages)
+
+
+def delete_text_order_messages(api, order_id, order_type):
+    """حذف پیام سفارش از کانال‌ها و پاک‌کردن رکوردهای مربوطه."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    messages = _get_text_order_messages(order_type, order_id)
+
+    if not messages:
+        return 0
+
+    def delete_one(item):
+        return api("deleteMessage", {
+            "chat_id": item["channel_id"],
+            "message_id": item["info_message_id"],
+        })
+
+    with ThreadPoolExecutor(
+        max_workers=min(12, max(1, len(messages)))
+    ) as pool:
+        results = list(pool.map(delete_one, messages))
+
+    for item, result in zip(messages, results):
+        if not result or not result.get("ok"):
+            print(
+                "Partner publisher: text order delete failed:",
+                item["channel_id"],
+                result,
+            )
+
+    with get_connection() as conn:
+        conn.execute("""
+            DELETE FROM text_order_channel_messages
+            WHERE order_type = ?
+              AND order_id = ?
+        """, (order_type, order_id))
+
+    return len(messages)
