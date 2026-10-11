@@ -12,6 +12,7 @@ from features import (
     daily_rewards,
     force_join,
     admin_panel,
+    admin_channel_stats,
     backup,
     partner_channels,
     partner_publisher,  # انتشار سفارش در کانال‌های همکار
@@ -258,6 +259,15 @@ def handle_message(message):
 
     register_user(user)
 
+    # آمار و مدیریت کانال‌های همکار
+    # پیش از پنل عمومی بررسی می‌شود تا دکمه خودش را بگیرد.
+    if admin_channel_stats.handle_message(
+        message,
+        api,
+        send_message
+    ):
+        return
+
     # پنل ادمین باید پیش از پردازش قابلیت‌های عادی اجرا شود.
     if admin_panel.handle_message(
         message,
@@ -399,6 +409,15 @@ def handle_callback(callback):
     data = callback.get("data", "")
     callback_id = callback.get("id")
     user_id = callback.get("from", {}).get("id")
+
+    # دکمه‌های آمار و مدیریت کانال‌های همکار
+    if admin_channel_stats.handle_callback(
+        callback,
+        api,
+        send_message,
+        answer_callback
+    ):
+        return
 
     # اصلاح گزارش: قبل از جوین اجباری پردازش شود.
     # در غیر این صورت، به‌جای گزارش، پیام عضویت نمایش داده می‌شد.
