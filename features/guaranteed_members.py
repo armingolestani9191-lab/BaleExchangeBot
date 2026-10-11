@@ -259,8 +259,7 @@ def _order_text(order):
         f"👥 تعداد درخواستی: {order['target_count']}\n"
         f"✅ عضویت‌های تأییدشده: {order['joined_count']}\n"
         f"📉 ریزش تأییدشده: {order['lost_count']}\n\n"
-        f"🆔 سفارش: #{order['id']}\n"
-        f"💰 قیمت هر ممبر: {PRICE_PER_MEMBER} سکه"
+        f"🆔 سفارش: #{order['id']}"
     )
 
 
