@@ -1,4 +1,3 @@
-
 import json
 import re
 import sqlite3
@@ -6,6 +5,11 @@ from datetime import datetime, timezone
 
 from config import ORDER_CHANNEL
 from database import get_connection
+from features.partner_publisher import (
+    publish_text_order,
+    edit_text_order_messages,
+    delete_text_order_messages,
+)
 
 
 PRICE_PER_MEMBER = 10
@@ -481,10 +485,13 @@ def _confirm_order(user_id, callback, api, send_message):
         "lost_count": 0
     }
 
-    result = send_message(
-        ORDER_CHANNEL,
+    result = publish_text_order(
+        api,
+        order_id,
         _order_text(order),
-        _order_keyboard(order)
+        _order_keyboard(order),
+        ORDER_CHANNEL,
+        "guaranteed_members",
     )
 
     if not result or not result.get("ok"):
@@ -740,15 +747,14 @@ def _claim_member(user_id, callback, api, send_message):
     )
 
     if completed:
-        if order["channel_message_id"]:
-            api("deleteMessage", {
-                "chat_id": ORDER_CHANNEL,
-                "message_id": order["channel_message_id"]
-            })
-
+        delete_text_order_messages(
+            api,
+            order_id,
+            "guaranteed_members",
+        )
         send_message(order["owner_id"], COMPLETED_ORDER_MESSAGE)
 
-    elif order["channel_message_id"]:
+    else:
         updated_order = {
             "id": order_id,
             "channel_username": order["channel_username"],
@@ -757,12 +763,13 @@ def _claim_member(user_id, callback, api, send_message):
             "lost_count": order["lost_count"]
         }
 
-        api("editMessageText", {
-            "chat_id": ORDER_CHANNEL,
-            "message_id": order["channel_message_id"],
-            "text": _order_text(updated_order),
-            "reply_markup": _order_keyboard(updated_order)
-        })
+        edit_text_order_messages(
+            api,
+            order_id,
+            "guaranteed_members",
+            _order_text(updated_order),
+            _order_keyboard(updated_order),
+        )
 
 
 def _parse_sqlite_datetime(value):
@@ -1039,7 +1046,7 @@ def check_guaranteed_memberships(api, send_message):
                 "این بازپرداخت فقط یک بار انجام می‌شود."
             )
 
-        # اگر پیام سفارش هنوز در کانال وجود دارد، تعداد ریزش را به‌روز کن.
+        # فقط پیام‌های موجود را به‌روز کن؛ منطق فعلی ریزش تغییر نمی‌کند.
         if claim["channel_message_id"]:
             with get_connection() as conn:
                 latest = conn.execute(
@@ -1061,12 +1068,13 @@ def check_guaranteed_memberships(api, send_message):
                     "lost_count": latest["lost_count"]
                 }
 
-                api("editMessageText", {
-                    "chat_id": ORDER_CHANNEL,
-                    "message_id": latest["channel_message_id"],
-                    "text": _order_text(updated_order),
-                    "reply_markup": _order_keyboard(updated_order)
-                })
+                edit_text_order_messages(
+                    api,
+                    order_id,
+                    "guaranteed_members",
+                    _order_text(updated_order),
+                    _order_keyboard(updated_order),
+                )
 
 
 def handle_callback_query(callback, api, send_message):
