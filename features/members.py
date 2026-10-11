@@ -1,10 +1,10 @@
-
 import json
 import re
 import sqlite3
 
 from config import ORDER_CHANNEL
 from database import get_connection
+from features import partner_publisher
 
 
 PRICE_PER_MEMBER = 5
@@ -148,7 +148,7 @@ def _check_bot_admin(api, channel_username):
 
 
 def _get_api_error_description(result):
-    """استخراج توضیح خطا از پاسخ API؛ حتی وقتی بدنه JSON به‌شکل متن باشد."""
+    """استخراج توضیح خطا از پاسخ API."""
     if not isinstance(result, dict):
         return ""
 
@@ -176,8 +176,6 @@ def _check_user_membership(api, channel_username, user_id):
     False: کاربر عضو نیست یا API این وضعیت را با اطمینان گزارش کرده
     None: بررسی به علت خطای نامشخص ممکن نیست
     """
-
-    # ابتدا مطمئن شو خود کانال از طریق API قابل دسترسی است.
     chat_result = api("getChat", {
         "chat_id": channel_username
     })
@@ -192,7 +190,6 @@ def _check_user_membership(api, channel_username, user_id):
         )
         return None
 
-    # حالا عضویت کاربر را بررسی کن.
     result = api("getChatMember", {
         "chat_id": channel_username,
         "user_id": user_id
@@ -200,11 +197,12 @@ def _check_user_membership(api, channel_username, user_id):
 
     if not result or not result.get("ok"):
         description = _get_api_error_description(result)
-        http_status = result.get("http_status") if isinstance(result, dict) else None
+        http_status = (
+            result.get("http_status")
+            if isinstance(result, dict)
+            else None
+        )
 
-        # بعضی پاسخ‌های بله برای کاربری که عضو نیست،
-        # به‌جای وضعیت left خطای 404 برمی‌گردانند.
-        # این تفسیر فقط پس از تأیید دسترسی به خود کانال انجام می‌شود.
         if (
             http_status == 404
             and "no such group or user" in description.lower()
@@ -388,8 +386,14 @@ def handle_message(message, api, send_message):
 
         keyboard = {
             "inline_keyboard": [[
-                {"text": "❌ لغو", "callback_data": "member_cancel"},
-                {"text": "✅ تأیید سفارش", "callback_data": "member_confirm"}
+                {
+                    "text": "❌ لغو",
+                    "callback_data": "member_cancel"
+                },
+                {
+                    "text": "✅ تأیید سفارش",
+                    "callback_data": "member_confirm"
+                }
             ]]
         }
 
@@ -439,7 +443,12 @@ def _confirm_order(user_id, callback, api, send_message):
         ).fetchone()
 
         if not row or row["state"] != "confirming":
-            _answer_callback(api, callback_id, "این سفارش قبلاً پردازش شده.", True)
+            _answer_callback(
+                api,
+                callback_id,
+                "این سفارش قبلاً پردازش شده.",
+                True
+            )
             return
 
         balance_row = conn.execute(
@@ -477,10 +486,13 @@ def _confirm_order(user_id, callback, api, send_message):
         "joined_count": 0
     }
 
-    result = send_message(
-        ORDER_CHANNEL,
+    result = partner_publisher.publish_text_order(
+        api,
+        order_id,
         _order_text(order),
-        _order_keyboard(order)
+        _order_keyboard(order),
+        ORDER_CHANNEL,
+        "members",
     )
 
     if not result or not result.get("ok"):
@@ -496,10 +508,18 @@ def _confirm_order(user_id, callback, api, send_message):
             )
 
         clear_state(user_id)
-        _answer_callback(api, callback_id, "انتشار سفارش ناموفق بود؛ سکه برگشت.", True)
+        _answer_callback(
+            api,
+            callback_id,
+            "انتشار سفارش ناموفق بود؛ سکه برگشت.",
+            True
+        )
 
         if chat_id:
-            send_message(chat_id, "❌ سفارش منتشر نشد؛ سکه‌ها برگشت داده شدن.")
+            send_message(
+                chat_id,
+                "❌ سفارش منتشر نشد؛ سکه‌ها برگشت داده شدن."
+            )
         return
 
     message_id = result.get("result", {}).get("message_id")
@@ -530,7 +550,12 @@ def _cancel_order(user_id, callback, api, send_message):
     state, _ = _get_state(user_id)
 
     if state != "confirming":
-        _answer_callback(api, callback_id, "این مرحله قبلاً تمام شده.", True)
+        _answer_callback(
+            api,
+            callback_id,
+            "این مرحله قبلاً تمام شده.",
+            True
+        )
         return
 
     clear_state(user_id)
@@ -561,7 +586,12 @@ def _claim_member(user_id, callback, api, send_message):
         return
 
     if order["owner_id"] == user_id:
-        _answer_callback(api, callback_id, "نمی‌تونی برای سفارش خودت پاداش بگیری.", True)
+        _answer_callback(
+            api,
+            callback_id,
+            "نمی‌تونی برای سفارش خودت پاداش بگیری.",
+            True
+        )
         return
 
     if order["status"] != "pending":
@@ -614,7 +644,12 @@ def _claim_member(user_id, callback, api, send_message):
             or current["status"] != "pending"
             or current["joined_count"] >= current["target_count"]
         ):
-            _answer_callback(api, callback_id, "این سفارش دیگه فعال نیست.", True)
+            _answer_callback(
+                api,
+                callback_id,
+                "این سفارش دیگه فعال نیست.",
+                True
+            )
             return
 
         user_info = callback.get("from", {})
@@ -627,7 +662,11 @@ def _claim_member(user_id, callback, api, send_message):
                 username = excluded.username,
                 first_name = excluded.first_name
             """,
-            (user_id, user_info.get("username"), user_info.get("first_name"))
+            (
+                user_id,
+                user_info.get("username"),
+                user_info.get("first_name")
+            )
         )
 
         try:
@@ -648,12 +687,20 @@ def _claim_member(user_id, callback, api, send_message):
             )
 
             conn.execute(
-                "UPDATE member_orders SET joined_count = joined_count + 1 WHERE id = ?",
+                """
+                UPDATE member_orders
+                SET joined_count = joined_count + 1
+                WHERE id = ?
+                """,
                 (order_id,)
             )
 
             updated = conn.execute(
-                "SELECT joined_count, target_count FROM member_orders WHERE id = ?",
+                """
+                SELECT joined_count, target_count
+                FROM member_orders
+                WHERE id = ?
+                """,
                 (order_id,)
             ).fetchone()
 
@@ -664,7 +711,8 @@ def _claim_member(user_id, callback, api, send_message):
                 conn.execute(
                     """
                     UPDATE member_orders
-                    SET status = 'completed', completed_at = CURRENT_TIMESTAMP
+                    SET status = 'completed',
+                        completed_at = CURRENT_TIMESTAMP
                     WHERE id = ?
                     """,
                     (order_id,)
@@ -677,7 +725,12 @@ def _claim_member(user_id, callback, api, send_message):
             new_balance = balance_row["coins"]
 
     if duplicate:
-        _answer_callback(api, callback_id, "قبلاً برای این سفارش سکه گرفتی.", True)
+        _answer_callback(
+            api,
+            callback_id,
+            "قبلاً برای این سفارش سکه گرفتی.",
+            True
+        )
         return
 
     _answer_callback(
@@ -687,13 +740,20 @@ def _claim_member(user_id, callback, api, send_message):
     )
 
     if completed:
-        if order["channel_message_id"]:
+        deleted_count = partner_publisher.delete_text_order_messages(
+            api,
+            order_id,
+            "members"
+        )
+
+        if not deleted_count and order["channel_message_id"]:
             api("deleteMessage", {
                 "chat_id": ORDER_CHANNEL,
                 "message_id": order["channel_message_id"]
             })
 
         send_message(order["owner_id"], COMPLETED_ORDER_MESSAGE)
+
     elif order["channel_message_id"]:
         updated_order = {
             "id": order_id,
@@ -702,12 +762,21 @@ def _claim_member(user_id, callback, api, send_message):
             "joined_count": new_count
         }
 
-        api("editMessageText", {
-            "chat_id": ORDER_CHANNEL,
-            "message_id": order["channel_message_id"],
-            "text": _order_text(updated_order),
-            "reply_markup": _order_keyboard(updated_order)
-        })
+        edited_count = partner_publisher.edit_text_order_messages(
+            api,
+            order_id,
+            "members",
+            _order_text(updated_order),
+            _order_keyboard(updated_order),
+        )
+
+        if not edited_count:
+            api("editMessageText", {
+                "chat_id": ORDER_CHANNEL,
+                "message_id": order["channel_message_id"],
+                "text": _order_text(updated_order),
+                "reply_markup": _order_keyboard(updated_order)
+            })
 
 
 def handle_callback_query(callback, api, send_message):
@@ -719,10 +788,13 @@ def handle_callback_query(callback, api, send_message):
 
     if data == "member_confirm":
         _confirm_order(user_id, callback, api, send_message)
+
     elif data == "member_cancel":
         _cancel_order(user_id, callback, api, send_message)
+
     elif data.startswith("member_claim:"):
         _claim_member(user_id, callback, api, send_message)
+
     else:
         _answer_callback(
             api,
