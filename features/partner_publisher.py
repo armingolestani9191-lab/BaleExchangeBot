@@ -1,4 +1,11 @@
+from concurrent.futures import ThreadPoolExecutor
+
 from database import get_connection
+
+
+# استخر مشترک برای ویرایش و حذف هم‌زمان پیام‌ها
+# به‌جای ساخت استخر جدید در هر درخواست، از همین استخر استفاده می‌شود.
+_MESSAGE_POOL = ThreadPoolExecutor(max_workers=12)
 
 
 # پاداش صاحب کانال به ازای هر سفارش منتشرشده
@@ -509,8 +516,6 @@ def edit_text_order_messages(
     reply_markup,
 ):
     """ویرایش پیام سفارش در تمام کانال‌های منتشرشده."""
-    from concurrent.futures import ThreadPoolExecutor
-
     messages = _get_text_order_messages(order_type, order_id)
 
     if not messages:
@@ -524,10 +529,19 @@ def edit_text_order_messages(
             "reply_markup": reply_markup,
         })
 
-    with ThreadPoolExecutor(
-        max_workers=min(12, max(1, len(messages)))
-    ) as pool:
-        results = list(pool.map(edit_one, messages))
+    # استفاده از استخر مشترک، بدون ساخت ThreadPoolExecutor جدید
+    futures = [
+        _MESSAGE_POOL.submit(edit_one, item)
+        for item in messages
+    ]
+
+    results = []
+    for future in futures:
+        try:
+            results.append(future.result())
+        except Exception as error:
+            results.append(None)
+            print("Partner publisher: text order edit exception:", repr(error))
 
     for item, result in zip(messages, results):
         if not result or not result.get("ok"):
@@ -542,8 +556,6 @@ def edit_text_order_messages(
 
 def delete_text_order_messages(api, order_id, order_type):
     """حذف پیام سفارش از کانال‌ها و پاک‌کردن رکوردهای مربوطه."""
-    from concurrent.futures import ThreadPoolExecutor
-
     messages = _get_text_order_messages(order_type, order_id)
 
     if not messages:
@@ -555,10 +567,19 @@ def delete_text_order_messages(api, order_id, order_type):
             "message_id": item["info_message_id"],
         })
 
-    with ThreadPoolExecutor(
-        max_workers=min(12, max(1, len(messages)))
-    ) as pool:
-        results = list(pool.map(delete_one, messages))
+    # استفاده از استخر مشترک، بدون ساخت ThreadPoolExecutor جدید
+    futures = [
+        _MESSAGE_POOL.submit(delete_one, item)
+        for item in messages
+    ]
+
+    results = []
+    for future in futures:
+        try:
+            results.append(future.result())
+        except Exception as error:
+            results.append(None)
+            print("Partner publisher: text order delete exception:", repr(error))
 
     for item, result in zip(messages, results):
         if not result or not result.get("ok"):
