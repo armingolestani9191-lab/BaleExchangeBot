@@ -1,4 +1,4 @@
-```python
+
 from database import get_connection
 
 
@@ -338,4 +338,3 @@ def publish_order(
         "channel_message_id": main_post_id,
         "info_message_id": main_info_id,
     }
-```
