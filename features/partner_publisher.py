@@ -1,5 +1,6 @@
 
 from concurrent.futures import ThreadPoolExecutor
+import traceback
 
 from database import get_connection
 
@@ -28,18 +29,17 @@ ORDER_TYPE_LABELS = {
 
 def get_partner_reward(order_type):
     """تعیین مبلغ پاداش براساس نوع سفارش."""
+    normalized_type = str(order_type or "").strip().lower()
     return PARTNER_REWARDS.get(
-        str(order_type or "").strip(),
+        normalized_type,
         PARTNER_REWARD_PER_ORDER,
     )
 
 
 def get_order_type_label(order_type):
     """گرفتن عنوان فارسی نوع سفارش."""
-    return ORDER_TYPE_LABELS.get(
-        str(order_type or "").strip(),
-        "تبلیغ",
-    )
+    normalized_type = str(order_type or "").strip().lower()
+    return ORDER_TYPE_LABELS.get(normalized_type, "تبلیغ")
 
 
 def init_tables():
@@ -151,80 +151,242 @@ def reward_partner_channel(
     api=None,
 ):
     """
-    افزودن پاداش مناسب به حساب صاحب کانال همکار.
-    برای هر کانال و سفارش فقط یک‌بار پاداش ثبت می‌شود.
+    پرداخت اتمیک پاداش صاحب کانال همکار.
+
+    مبلغ فقط یک‌بار برای هر کانال، نوع سفارش و شماره سفارش
+    به کیف پول اضافه می‌شود.
+
+    پیام موفقیت فقط پس از ثبت و بررسی موجودی جدید ارسال می‌شود.
     """
     try:
         channel_chat_id = int(channel_chat_id)
+        order_id = int(order_id)
+
+        if order_id <= 0:
+            print(
+                "Partner reward ERROR: invalid order_id:",
+                repr(order_id),
+            )
+            return False
+
     except (TypeError, ValueError):
+        print(
+            "Partner reward ERROR: invalid channel/order ID:",
+            repr(channel_chat_id),
+            repr(order_id),
+        )
         return False
 
-    reward_amount = get_partner_reward(order_type)
-    order_label = get_order_type_label(order_type)
-    owner_id = None
+    normalized_type = str(order_type or "").strip().lower()
 
-    with get_connection() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-
-        channel = conn.execute("""
-            SELECT id, owner_id
-            FROM partner_channels
-            WHERE chat_id = ?
-              AND status = 'active'
-            LIMIT 1
-        """, (channel_chat_id,)).fetchone()
-
-        if not channel:
-            conn.commit()
-            return False
-
-        owner_id = channel["owner_id"]
-
-        result = conn.execute("""
-            INSERT OR IGNORE INTO partner_order_rewards (
-                channel_id,
-                order_type,
-                order_id,
-                amount
-            )
-            VALUES (?, ?, ?, ?)
-        """, (
-            channel["id"],
-            order_type,
+    if not normalized_type:
+        print(
+            "Partner reward ERROR: empty order_type:",
             order_id,
-            reward_amount,
-        ))
+        )
+        return False
 
-        # اگر پاداش قبلاً ثبت شده، دوباره سکه اضافه نمی‌کنیم.
-        if result.rowcount != 1:
+    reward_amount = get_partner_reward(normalized_type)
+    order_label = get_order_type_label(normalized_type)
+
+    owner_id = None
+    new_balance = None
+
+    try:
+        with get_connection() as conn:
+            # قفل نوشتن را از ابتدای تراکنش می‌گیریم تا دو اجرای
+            # هم‌زمان نتوانند یک پاداش را دوبار پرداخت کنند.
+            conn.execute("BEGIN IMMEDIATE")
+
+            channel = conn.execute("""
+                SELECT id, owner_id, chat_id, status
+                FROM partner_channels
+                WHERE chat_id = ?
+                  AND status = 'active'
+                LIMIT 1
+            """, (channel_chat_id,)).fetchone()
+
+            if not channel:
+                print(
+                    "Partner reward SKIPPED: active channel not found:",
+                    channel_chat_id,
+                    "order_type=",
+                    normalized_type,
+                    "order_id=",
+                    order_id,
+                )
+                conn.rollback()
+                return False
+
+            owner_id = int(channel["owner_id"])
+            channel_id = int(channel["id"])
+
+            # ابتدا بررسی می‌کنیم آیا این پاداش قبلاً ثبت شده است.
+            existing_reward = conn.execute("""
+                SELECT id, amount, created_at
+                FROM partner_order_rewards
+                WHERE channel_id = ?
+                  AND order_type = ?
+                  AND order_id = ?
+                LIMIT 1
+            """, (
+                channel_id,
+                normalized_type,
+                order_id,
+            )).fetchone()
+
+            if existing_reward:
+                current_user = conn.execute("""
+                    SELECT coins
+                    FROM users
+                    WHERE user_id = ?
+                    LIMIT 1
+                """, (owner_id,)).fetchone()
+
+                current_balance = (
+                    int(current_user["coins"] or 0)
+                    if current_user else None
+                )
+
+                print(
+                    "Partner reward DUPLICATE - no second payment:",
+                    "owner_id=", owner_id,
+                    "channel_id=", channel_id,
+                    "order_type=", normalized_type,
+                    "order_id=", order_id,
+                    "recorded_amount=", existing_reward["amount"],
+                    "current_balance=", current_balance,
+                )
+
+                conn.rollback()
+                return False
+
+            # اطمینان از وجود صاحب کانال در جدول کیف پول.
+            # username و first_name در ساختار دیتابیس فعلی nullable هستند.
+            conn.execute("""
+                INSERT OR IGNORE INTO users (
+                    user_id,
+                    username,
+                    first_name,
+                    coins
+                )
+                VALUES (?, NULL, NULL, 0)
+            """, (owner_id,))
+
+            user_before = conn.execute("""
+                SELECT user_id, coins
+                FROM users
+                WHERE user_id = ?
+                LIMIT 1
+            """, (owner_id,)).fetchone()
+
+            if not user_before:
+                raise RuntimeError(
+                    "User row could not be created or found; "
+                    f"owner_id={owner_id}"
+                )
+
+            old_balance = int(user_before["coins"] or 0)
+
+            # افزایش موجودی کیف پول.
+            update_result = conn.execute("""
+                UPDATE users
+                SET coins = COALESCE(coins, 0) + ?
+                WHERE user_id = ?
+            """, (
+                reward_amount,
+                owner_id,
+            ))
+
+            # اگر دقیقاً یک حساب به‌روزرسانی نشده باشد، کل پرداخت
+            # لغو می‌شود و هیچ رکورد پاداشی ثبت نخواهد شد.
+            if update_result.rowcount != 1:
+                raise RuntimeError(
+                    "Wallet UPDATE did not modify exactly one row; "
+                    f"owner_id={owner_id}, "
+                    f"rowcount={update_result.rowcount}"
+                )
+
+            # موجودی را در همان تراکنش دوباره می‌خوانیم.
+            user_after = conn.execute("""
+                SELECT coins
+                FROM users
+                WHERE user_id = ?
+                LIMIT 1
+            """, (owner_id,)).fetchone()
+
+            if not user_after:
+                raise RuntimeError(
+                    "Wallet row missing after UPDATE; "
+                    f"owner_id={owner_id}"
+                )
+
+            new_balance = int(user_after["coins"] or 0)
+
+            expected_balance = old_balance + reward_amount
+
+            if new_balance != expected_balance:
+                raise RuntimeError(
+                    "Wallet balance verification failed; "
+                    f"owner_id={owner_id}, "
+                    f"old_balance={old_balance}, "
+                    f"expected={expected_balance}, "
+                    f"actual={new_balance}"
+                )
+
+            # فقط پس از افزایش موفق موجودی، رکورد پاداش ثبت می‌شود.
+            conn.execute("""
+                INSERT INTO partner_order_rewards (
+                    channel_id,
+                    order_type,
+                    order_id,
+                    amount
+                )
+                VALUES (?, ?, ?, ?)
+            """, (
+                channel_id,
+                normalized_type,
+                order_id,
+                reward_amount,
+            ))
+
+            # خروج موفق از with نیز تراکنش را commit می‌کند؛
+            # این commit صریح، موفقیت ثبت را قبل از ارسال پیام روشن می‌کند.
             conn.commit()
-            return False
 
-        conn.execute("""
-            INSERT OR IGNORE INTO users (user_id, coins)
-            VALUES (?, 0)
-        """, (owner_id,))
+        print(
+            "Partner reward PAID:",
+            "owner_id=", owner_id,
+            "channel_id=", channel_id,
+            "order_type=", normalized_type,
+            "order_id=", order_id,
+            "amount=", reward_amount,
+            "old_balance=", old_balance,
+            "new_balance=", new_balance,
+        )
 
-        conn.execute("""
-            UPDATE users
-            SET coins = coins + ?
-            WHERE user_id = ?
-        """, (
-            reward_amount,
-            owner_id,
-        ))
+    except Exception as error:
+        print(
+            "Partner reward FAILED:",
+            "channel_chat_id=", repr(channel_chat_id),
+            "order_type=", repr(normalized_type),
+            "order_id=", repr(order_id),
+            "owner_id=", repr(owner_id),
+            "error=", repr(error),
+        )
+        traceback.print_exc()
+        return False
 
-        conn.commit()
-
-    # اطلاع‌رسانی خصوصی فقط برای صاحب کانال
-    if api and owner_id:
-        text = (
-            "🎉 تبریک! پاداش شما واریز شد.\n"
+    # پیام خصوصی فقط بعد از commit موفق ارسال می‌شود.
+    if api and owner_id is not None:
+        notification_text = (
+            "🎉 تبریک! پاداش شما با موفقیت واریز شد.\n"
             "━━━━━━━━━━━━━━━━━━\n\n"
             f"📢 نوع سفارش: {order_label}\n"
             f"🧾 شماره سفارش: #{order_id}\n\n"
             f"💰 مبلغ واریزی: {reward_amount} سکه\n"
-            "✅ وضعیت: واریز موفق\n\n"
+            f"👛 موجودی جدید کیف پول: {new_balance} سکه\n"
+            "✅ وضعیت: ثبت و تأیید شد\n\n"
             "🎁 این پاداش بابت انتشار موفق سفارش "
             "در کانال همکار شما پرداخت شد.\n\n"
             "❤️ از همکاری و همراهی شما سپاسگزاریم."
@@ -233,22 +395,26 @@ def reward_partner_channel(
         try:
             response = api("sendMessage", {
                 "chat_id": owner_id,
-                "text": text,
+                "text": notification_text,
             })
 
             if not response or not response.get("ok"):
                 print(
-                    "Partner publisher: owner reward notification failed:",
-                    owner_id,
-                    response,
+                    "Partner publisher: owner notification failed:",
+                    "owner_id=", owner_id,
+                    "order_type=", normalized_type,
+                    "order_id=", order_id,
+                    "response=", response,
                 )
 
         except Exception as error:
             print(
                 "Partner publisher: owner notification exception:",
-                owner_id,
-                repr(error),
+                "owner_id=", owner_id,
+                "order_id=", order_id,
+                "error=", repr(error),
             )
+            traceback.print_exc()
 
     return True
 
@@ -281,6 +447,7 @@ def publish_order(
     main_post_id = main_post.get("result", {}).get("message_id")
 
     if not main_post_id:
+        print("Partner publisher: main post has no message_id:", main_post)
         return {"ok": False}
 
     main_info = api("sendMessage", {
@@ -348,6 +515,11 @@ def publish_order(
             )
 
             if not partner_post_id:
+                print(
+                    "Partner publisher: forward response missing message_id:",
+                    partner_chat_id,
+                    partner_post,
+                )
                 continue
 
             partner_info = api("sendMessage", {
@@ -397,6 +569,7 @@ def publish_order(
                 partner_chat_id,
                 repr(error),
             )
+            traceback.print_exc()
 
     return {
         "ok": True,
@@ -509,6 +682,10 @@ def publish_text_order(
     main_message_id = main_result.get("result", {}).get("message_id")
 
     if not main_message_id:
+        print(
+            "Partner publisher: main text response missing message_id:",
+            main_result,
+        )
         return {"ok": False}
 
     _save_text_order_message(
@@ -551,6 +728,11 @@ def publish_text_order(
             )
 
             if not partner_message_id:
+                print(
+                    "Partner publisher: text order response missing message_id:",
+                    partner_chat_id,
+                    result,
+                )
                 continue
 
             _save_text_order_message(
@@ -573,6 +755,7 @@ def publish_text_order(
                 partner_chat_id,
                 repr(error),
             )
+            traceback.print_exc()
 
     return {
         "ok": True,
@@ -618,6 +801,7 @@ def edit_text_order_messages(
                 "Partner publisher: text order edit exception:",
                 repr(error),
             )
+            traceback.print_exc()
 
     for item, result in zip(messages, results):
         if not result or not result.get("ok"):
@@ -658,6 +842,7 @@ def delete_text_order_messages(api, order_id, order_type):
                 "Partner publisher: text order delete exception:",
                 repr(error),
             )
+            traceback.print_exc()
 
     for item, result in zip(messages, results):
         if not result or not result.get("ok"):
