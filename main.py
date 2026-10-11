@@ -1,3 +1,4 @@
+
 import time
 import threading
 import requests
@@ -12,7 +13,8 @@ from features import (
     force_join,
     admin_panel,
     backup,
-    partner_channels,  # کانال همکار
+    partner_channels,
+    partner_publisher,  # انتشار سفارش در کانال‌های همکار
 )
 
 
@@ -114,7 +116,7 @@ def main_menu(user_id=None):
             {"text": "🛡️ ممبر تضمینی"}
         ],
         [
-            {"text": "📢 کانال همکار"}  # کانال همکار
+            {"text": "📢 کانال همکار"}
         ],
         [
             {"text": "📖 راهنما"}
@@ -320,7 +322,7 @@ def handle_message(message):
         send_message(
             chat_id,
             "به دنیای تبلیغات خوش اومدی! 👋\n"
-            "اینجا می‌تونی رایگان شروع کنی، خدمات رو ببینی و سفارش تبلیغاتت رو ثبت کنی.\n"
+            "اینجا می‌تونی رایگان شروع کنی، خدمات رو ببینی و سفارشت رو ثبت کنی.\n"
             "📖 برای آشنایی با امکانات ربات، راهنما رو بخون.\n"
             "برای شروع، یکی از گزینه‌های منوی پایین رو انتخاب کن.",
             main_menu(user_id)
@@ -574,6 +576,9 @@ def main():
 
     # ساخت جدول‌های کانال همکار
     partner_channels.init_tables()
+
+    # ساخت جدول‌های انتشار سفارش و پاداش کانال همکار
+    partner_publisher.init_tables()
 
     views.init_views_db()
     members.init_members_db()
