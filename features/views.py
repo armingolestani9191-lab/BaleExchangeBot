@@ -1,4 +1,5 @@
 import json
+from concurrent.futures import ThreadPoolExecutor
 
 from database import get_connection
 from config import ORDER_CHANNEL, ADMIN_ID
@@ -10,11 +11,8 @@ MAX_ORDER_COUNT = 10000
 BOT_ID = None
 BOT_USERNAME = None
 
-
-def set_bot_info(bot_id, username):
-    global BOT_ID, BOT_USERNAME
-    BOT_ID = bot_id
-    BOT_USERNAME = (username or "").lstrip("@")
+# استخر مشترک برای عملیات پیام‌های سفارش سین
+_VIEWS_MESSAGE_POOL = ThreadPoolExecutor(max_workers=12)
 
 
 COMPLETED_ORDER_MESSAGE = """🎉 تبریک!
@@ -29,6 +27,12 @@ COMPLETED_ORDER_MESSAGE = """🎉 تبریک!
 • 🚀 اگه سکه داری، همین الان سفارش بعدیت رو ثبت کن!
 
 ❤️ ممنون که از ربات ما استفاده می‌کنی."""
+
+
+def set_bot_info(bot_id, username):
+    global BOT_ID, BOT_USERNAME
+    BOT_ID = bot_id
+    BOT_USERNAME = (username or "").lstrip("@")
 
 
 def init_views_db():
@@ -146,7 +150,6 @@ def handle_message(message, api, send_message):
 
     state, payload = get_state(user_id)
 
-    # لغو مرحلهٔ فعلی
     if text in ("/cancel", "لغو سفارش"):
         if state:
             clear_state(user_id)
@@ -159,7 +162,6 @@ def handle_message(message, api, send_message):
 
         return False
 
-    # دریافت پست فورواردشده
     if state == "waiting_post":
         if (
             not message.get("forward_origin")
@@ -189,7 +191,6 @@ def handle_message(message, api, send_message):
 
         return True
 
-    # دریافت تعداد سین
     if state == "waiting_count":
         try:
             target_count = int(text)
@@ -209,7 +210,6 @@ def handle_message(message, api, send_message):
 
         total_cost = target_count
 
-        # بررسی موجودی و ثبت اولیه سفارش
         with get_connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
 
@@ -259,7 +259,6 @@ def handle_message(message, api, send_message):
             order_id = cursor.lastrowid
             conn.commit()
 
-        # انتشار سفارش در کانال اصلی و کانال‌های همکار
         published = partner_publisher.publish_order(
             api=api,
             order_id=order_id,
@@ -276,7 +275,6 @@ def handle_message(message, api, send_message):
             order_type="views"
         )
 
-        # در صورت ناموفق‌بودن انتشار اصلی، سفارش لغو و سکه‌ها برگردانده شوند
         if not published or not published.get("ok"):
             with get_connection() as conn:
                 conn.execute("BEGIN IMMEDIATE")
@@ -338,7 +336,6 @@ def handle_message(message, api, send_message):
             )
             return True
 
-        # ذخیره شناسه پیام‌های کانال اصلی در جدول سفارش؛ مانند قبل
         with get_connection() as conn:
             conn.execute(
                 """
@@ -369,6 +366,37 @@ def handle_message(message, api, send_message):
     return False
 
 
+def _run_parallel_message_actions(messages, action, error_label):
+    """
+    اجرای هم‌زمان عملیات پیام‌ها در کانال‌های مختلف.
+    نتیجهٔ هر عملیات برای حفظ رفتار فعلی بررسی می‌شود.
+    """
+    if not messages:
+        return []
+
+    futures = [
+        _VIEWS_MESSAGE_POOL.submit(action, item)
+        for item in messages
+    ]
+
+    results = []
+
+    for item, future in zip(messages, futures):
+        try:
+            result = future.result()
+        except Exception as error:
+            print(
+                f"{error_label}:",
+                item.get("channel_id"),
+                repr(error)
+            )
+            result = None
+
+        results.append(result)
+
+    return results
+
+
 def handle_callback_query(callback, api, send_message):
     callback_id = callback.get("id")
     user = callback.get("from", {})
@@ -379,7 +407,6 @@ def handle_callback_query(callback, api, send_message):
     if not callback_id or not user_id:
         return False
 
-    # ثبت کلیک روی دکمهٔ دیدم
     if data.startswith("seen:"):
         try:
             order_id = int(data.split(":", 1)[1])
@@ -424,7 +451,6 @@ def handle_callback_query(callback, api, send_message):
                 )
                 return True
 
-            # مطمئن می‌شویم کاربر در دیتابیس وجود دارد
             conn.execute(
                 """
                 INSERT INTO users (
@@ -498,13 +524,11 @@ def handle_callback_query(callback, api, send_message):
             "🎉 یک سکه به حسابت اضافه شد!"
         )
 
-        # پیام‌های سفارش ذخیره‌شده در کانال اصلی و کانال‌های همکار
         saved_messages = partner_publisher.get_order_messages(order_id)
 
         if completed:
             if saved_messages:
-                # حذف پست و پیام اطلاعات از تمام کانال‌هایی که سفارش در آن‌ها منتشر شده
-                for saved in saved_messages:
+                def delete_saved_message(saved):
                     if saved.get("post_message_id"):
                         api(
                             "deleteMessage",
@@ -523,10 +547,15 @@ def handle_callback_query(callback, api, send_message):
                             }
                         )
 
+                _run_parallel_message_actions(
+                    saved_messages,
+                    delete_saved_message,
+                    "Views order delete error"
+                )
+
                 partner_publisher.delete_order_messages(order_id)
 
             else:
-                # سازگاری با سفارش‌های قدیمی که اطلاعات کانال همکار ندارند
                 if channel_message_id:
                     api(
                         "deleteMessage",
@@ -545,14 +574,12 @@ def handle_callback_query(callback, api, send_message):
                         }
                     )
 
-            # پیام جدید برای صاحب سفارش
             send_message(
                 owner_id,
                 COMPLETED_ORDER_MESSAGE
             )
 
         else:
-            # متن جدید پس از هر کلیک یکتا
             new_info_text = (
                 f"📋 **سفارش سین**\n\n"
                 f"👤 سین درخواستی: {target_count}\n"
@@ -561,21 +588,27 @@ def handle_callback_query(callback, api, send_message):
             )
 
             if saved_messages:
-                # به‌روزرسانی شمارنده در تمام کانال‌ها
-                for saved in saved_messages:
-                    if saved.get("info_message_id"):
-                        api(
-                            "editMessageText",
-                            {
-                                "chat_id": saved["channel_id"],
-                                "message_id": saved["info_message_id"],
-                                "text": new_info_text,
-                                "reply_markup": order_keyboard(order_id)
-                            }
-                        )
+                def edit_saved_message(saved):
+                    if not saved.get("info_message_id"):
+                        return None
+
+                    return api(
+                        "editMessageText",
+                        {
+                            "chat_id": saved["channel_id"],
+                            "message_id": saved["info_message_id"],
+                            "text": new_info_text,
+                            "reply_markup": order_keyboard(order_id)
+                        }
+                    )
+
+                _run_parallel_message_actions(
+                    saved_messages,
+                    edit_saved_message,
+                    "Views order edit error"
+                )
 
             elif info_message_id:
-                # رفتار قبلی برای سفارش‌هایی که در جدول جدید ثبت نشده‌اند
                 api(
                     "editMessageText",
                     {
@@ -588,7 +621,6 @@ def handle_callback_query(callback, api, send_message):
 
         return True
 
-    # ثبت گزارش سفارش
     if data.startswith("report:"):
         try:
             order_id = int(data.split(":", 1)[1])
@@ -596,7 +628,6 @@ def handle_callback_query(callback, api, send_message):
             answer_callback(api, callback_id, "❌ سفارش نامعتبره.")
             return True
 
-        # تراکنش فوری جلوی ثبت چند گزارش هم‌زمان برای یک سفارش را می‌گیرد.
         with get_connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
 
@@ -627,7 +658,6 @@ def handle_callback_query(callback, api, send_message):
                 )
                 return True
 
-            # هر کاربر برای هر سفارش فقط یک‌بار اجازهٔ گزارش دارد.
             existing_report = conn.execute(
                 """
                 SELECT id
@@ -647,7 +677,6 @@ def handle_callback_query(callback, api, send_message):
                 )
                 return True
 
-            # ثبت یا به‌روزرسانی اطلاعات گزارش‌دهنده
             conn.execute(
                 """
                 INSERT INTO users (
@@ -665,7 +694,6 @@ def handle_callback_query(callback, api, send_message):
                 )
             )
 
-            # دریافت مشخصات خریدار برای پیام ادمین
             buyer = conn.execute(
                 """
                 SELECT username, first_name
@@ -687,7 +715,6 @@ def handle_callback_query(callback, api, send_message):
 
             conn.commit()
 
-        # گزارش فقط بعد از ثبت موفق در دیتابیس به ادمین فرستاده می‌شود.
         answer_callback(
             api,
             callback_id,
@@ -695,7 +722,6 @@ def handle_callback_query(callback, api, send_message):
         )
 
         if ADMIN_ID:
-            # فوروارد واقعی بنر سفارش؛ حفظ رسانه و سربرگ فوروارد.
             banner_message_id = order["channel_message_id"]
 
             if banner_message_id:
