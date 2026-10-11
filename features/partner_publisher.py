@@ -7,8 +7,39 @@ from database import get_connection
 # استخر مشترک برای ویرایش و حذف هم‌زمان پیام‌ها
 _MESSAGE_POOL = ThreadPoolExecutor(max_workers=12)
 
-# پاداش صاحب کانال به ازای هر سفارش منتشرشده
+
+# مبلغ پاداش صاحب کانال برای هر نوع سفارش
+PARTNER_REWARDS = {
+    "views": 5,
+    "members": 7,
+    "guaranteed_members": 10,
+}
+
+# مبلغ پیش‌فرض برای سازگاری با سفارش‌های ناشناخته
 PARTNER_REWARD_PER_ORDER = 5
+
+# عنوان فارسی هر نوع سفارش
+ORDER_TYPE_LABELS = {
+    "views": "تبلیغ سین",
+    "members": "تبلیغ ممبر معمولی",
+    "guaranteed_members": "تبلیغ ممبر تضمینی",
+}
+
+
+def get_partner_reward(order_type):
+    """تعیین مبلغ پاداش براساس نوع سفارش."""
+    return PARTNER_REWARDS.get(
+        str(order_type or "").strip(),
+        PARTNER_REWARD_PER_ORDER,
+    )
+
+
+def get_order_type_label(order_type):
+    """گرفتن عنوان فارسی نوع سفارش."""
+    return ORDER_TYPE_LABELS.get(
+        str(order_type or "").strip(),
+        "تبلیغ",
+    )
 
 
 def init_tables():
@@ -120,16 +151,17 @@ def reward_partner_channel(
     api=None,
 ):
     """
-    افزودن ۵ سکه به حساب صاحب کانال همکار.
-    فقط برای پاداش جدید، پیام خصوصی ارسال می‌شود.
+    افزودن پاداش مناسب به حساب صاحب کانال همکار.
+    برای هر کانال و سفارش فقط یک‌بار پاداش ثبت می‌شود.
     """
     try:
         channel_chat_id = int(channel_chat_id)
     except (TypeError, ValueError):
         return False
 
+    reward_amount = get_partner_reward(order_type)
+    order_label = get_order_type_label(order_type)
     owner_id = None
-    reward_amount = PARTNER_REWARD_PER_ORDER
 
     with get_connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
@@ -163,7 +195,7 @@ def reward_partner_channel(
             reward_amount,
         ))
 
-        # پاداش تکراری نباید دوباره ثبت شود.
+        # اگر پاداش قبلاً ثبت شده، دوباره سکه اضافه نمی‌کنیم.
         if result.rowcount != 1:
             conn.commit()
             return False
@@ -184,17 +216,18 @@ def reward_partner_channel(
 
         conn.commit()
 
-    # اطلاع‌رسانی خصوصی فقط به صاحب کانال
+    # اطلاع‌رسانی خصوصی فقط برای صاحب کانال
     if api and owner_id:
         text = (
-            "🎉 پاداش انتشار پست به حساب شما اضافه شد!\n\n"
-            "سلام دوست عزیز 🌹\n"
-            "از همکاری شما با کانال‌های همکار ما ممنونیم.\n\n"
-            "📢 بابت انتشار موفق یک سفارش در کانال شما، "
-            f"{reward_amount} سکه به حساب شما اضافه شد.\n\n"
-            f"💰 مقدار پاداش: {reward_amount} سکه\n"
-            "✅ وضعیت: با موفقیت واریز شد\n\n"
-            "از همراهی شما سپاسگزاریم ❤️"
+            "🎉 تبریک! پاداش شما واریز شد.\n"
+            "━━━━━━━━━━━━━━━━━━\n\n"
+            f"📢 نوع سفارش: {order_label}\n"
+            f"🧾 شماره سفارش: #{order_id}\n\n"
+            f"💰 مبلغ واریزی: {reward_amount} سکه\n"
+            "✅ وضعیت: واریز موفق\n\n"
+            "🎁 این پاداش بابت انتشار موفق سفارش "
+            "در کانال همکار شما پرداخت شد.\n\n"
+            "❤️ از همکاری و همراهی شما سپاسگزاریم."
         )
 
         try:
