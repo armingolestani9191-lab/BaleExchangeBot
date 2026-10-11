@@ -1,4 +1,3 @@
-
 import re
 
 from database import get_connection
@@ -6,10 +5,11 @@ from database import get_connection
 
 BTN_PARTNER = "📢 کانال همکار"
 BTN_ADD_CHANNEL = "➕ افزودن کانال"
+BTN_REMOVE_CHANNEL = "➖ حذف کانال"
 BTN_MY_CHANNELS = "📋 کانال‌های من"
 BTN_PARTNER_BACK = "🔙 بازگشت"
 
-# وضعیت موقت مراحل ثبت کانال
+# وضعیت موقت مراحل ثبت یا حذف کانال
 _states = {}
 
 
@@ -39,6 +39,7 @@ def _menu_keyboard():
     return {
         "keyboard": [
             [{"text": BTN_ADD_CHANNEL}],
+            [{"text": BTN_REMOVE_CHANNEL}],
             [{"text": BTN_MY_CHANNELS}],
             [{"text": BTN_PARTNER_BACK}]
         ],
@@ -205,6 +206,16 @@ def _check_bot_admin(api, chat_id):
     return True, chat, None
 
 
+def _channel_success_text(title, chat_id):
+    return (
+        "✅ کانال با موفقیت ثبت و فعال شد!\n\n"
+        f"📢 نام کانال: {title}\n"
+        f"🆔 شناسه کانال: {chat_id}\n\n"
+        "از این به بعد سفارش‌های جدید می‌تونن در کانال همکار منتشر بشن. "
+        "برای هر سفارش که با موفقیت در کانالت منتشر بشه، ۵ سکه پاداش می‌گیری."
+    )
+
+
 def _add_channel(user_id, value, api):
     channel_ref = _normalise_channel(value)
 
@@ -229,19 +240,40 @@ def _add_channel(user_id, value, api):
 
     with get_connection() as conn:
         existing = conn.execute("""
-            SELECT owner_id, status
+            SELECT id, owner_id, status
             FROM partner_channels
             WHERE chat_id = ?
+            LIMIT 1
         """, (chat_id,)).fetchone()
 
         if existing:
-            if existing["owner_id"] == user_id:
+            if int(existing["owner_id"]) != int(user_id):
+                return (
+                    False,
+                    "❌ این کانال قبلاً توسط حساب دیگری ثبت شده است."
+                )
+
+            if existing["status"] != "inactive":
                 return False, "این کانال قبلاً ثبت شده است."
 
-            return (
-                False,
-                "این کانال قبلاً توسط حساب دیگری ثبت شده است."
-            )
+            # کانال قبلاً حذف شده بود؛ در صورت ثبت مجدد فعالش کن.
+            conn.execute("""
+                UPDATE partner_channels
+                SET
+                    username = ?,
+                    title = ?,
+                    status = 'active',
+                    approved_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                  AND owner_id = ?
+            """, (
+                username,
+                title,
+                existing["id"],
+                user_id,
+            ))
+
+            return True, _channel_success_text(title, chat_id)
 
         conn.execute("""
             INSERT INTO partner_channels (
@@ -260,13 +292,7 @@ def _add_channel(user_id, value, api):
             title
         ))
 
-    return True, (
-        "✅ کانال با موفقیت ثبت و تأیید شد!\n\n"
-        f"📢 نام کانال: {title}\n"
-        f"🆔 شناسه کانال: {chat_id}\n\n"
-        "از این به بعد سفارش‌های جدید می‌تونن در کانال همکار منتشر بشن. "
-        "برای هر سفارش که با موفقیت در کانالت منتشر بشه، ۵ سکه پاداش می‌گیری."
-    )
+    return True, _channel_success_text(title, chat_id)
 
 
 def _my_channels(user_id):
@@ -299,7 +325,7 @@ def _my_channels(user_id):
         elif row["status"] == "pending":
             status_text = "در انتظار تأیید"
         else:
-            status_text = "غیرفعال"
+            status_text = "غیرفعال / حذف‌شده"
 
         channel_name = (
             row["title"]
@@ -309,12 +335,84 @@ def _my_channels(user_id):
 
         lines.append(
             f"📢 {channel_name}\n"
+            f"🔢 شناسه ثبت کانال: {row['id']}\n"
             f"وضعیت: {status_text}\n"
             f"💰 درآمد ثبت‌شده: {row['earnings']} سکه\n"
             f"✅ سفارش‌های پاداش‌گرفته: {row['valid_actions']}\n"
         )
 
     return "\n".join(lines)
+
+
+def _channels_for_removal(user_id):
+    with get_connection() as conn:
+        rows = conn.execute("""
+            SELECT
+                id,
+                chat_id,
+                username,
+                title
+            FROM partner_channels
+            WHERE owner_id = ?
+              AND status = 'active'
+            ORDER BY id DESC
+        """, (user_id,)).fetchall()
+
+    return rows
+
+
+def _remove_channel(user_id, value):
+    """
+    فقط کانالی را غیرفعال می‌کند که متعلق به همین کاربر باشد.
+    رکورد کانال حذف فیزیکی نمی‌شود تا سابقه پاداش و درآمد باقی بماند.
+    """
+    value = value.strip()
+
+    if not value.isdigit():
+        return (
+            False,
+            "❌ شناسه ثبت کانال باید عددی باشد.\n"
+            "عدد کنار «شناسه ثبت کانال» را بفرست."
+        )
+
+    channel_id = int(value)
+
+    with get_connection() as conn:
+        row = conn.execute("""
+            SELECT id, title, chat_id
+            FROM partner_channels
+            WHERE id = ?
+              AND owner_id = ?
+              AND status = 'active'
+            LIMIT 1
+        """, (channel_id, user_id)).fetchone()
+
+        if not row:
+            return (
+                False,
+                "❌ کانال فعالی با این شناسه در فهرست خودت پیدا نشد.\n"
+                "شناسه را از فهرست کانال‌های خودت بررسی کن."
+            )
+
+        conn.execute("""
+            UPDATE partner_channels
+            SET status = 'inactive'
+            WHERE id = ?
+              AND owner_id = ?
+              AND status = 'active'
+        """, (
+            channel_id,
+            user_id,
+        ))
+
+    title = row["title"] or str(row["chat_id"])
+
+    return True, (
+        "✅ کانال از فهرست همکارهای فعال خارج شد.\n\n"
+        f"📢 کانال: {title}\n\n"
+        "از این به بعد سفارش جدیدی در این کانال منتشر نمی‌شود.\n"
+        "💰 سابقه درآمد و پاداش‌های قبلی محفوظ است."
+    )
 
 
 def handle_message(message, api, send_message):
@@ -349,8 +447,8 @@ def handle_message(message, api, send_message):
             send_message,
             chat_id,
             "📢 بخش کانال‌های همکار\n\n"
-            "از این بخش می‌تونی کانالت رو ثبت کنی و "
-            "وضعیت و آمار درآمدش رو ببینی.",
+            "از این بخش می‌تونی کانالت رو ثبت کنی، "
+            "کانال‌های ثبت‌شده رو ببینی یا کانالی رو از همکاری خارج کنی.",
             _menu_keyboard()
         )
         return True
@@ -366,7 +464,56 @@ def handle_message(message, api, send_message):
             "۲. دسترسی ادمین برای ارسال، ویرایش و حذف پیام‌ها بده.\n"
             "۳. لینک عمومی یا آیدی کانال را همین‌جا بفرست.\n\n"
             "مثال: @my_channel\n\n"
+            "برای لغو، /cancel را بفرست.",
+            _menu_keyboard()
+        )
+        return True
+
+    if text == BTN_REMOVE_CHANNEL:
+        rows = _channels_for_removal(user_id)
+
+        if not rows:
+            _states.pop(user_id, None)
+
+            _send(
+                send_message,
+                chat_id,
+                "فعلاً کانال همکار فعالی برای حذف نداری.",
+                _menu_keyboard()
+            )
+            return True
+
+        _states[user_id] = "waiting_delete_channel"
+
+        lines = [
+            "➖ حذف کانال همکار\n",
+            "کانالی را که می‌خواهی حذف کنی از فهرست زیر پیدا کن.",
+            "فقط عدد «شناسه ثبت کانال» را در پیام بعدی بفرست:\n"
+        ]
+
+        for row in rows:
+            channel_name = (
+                row["title"]
+                or row["username"]
+                or str(row["chat_id"])
+            )
+
+            lines.append(
+                f"📢 {channel_name}\n"
+                f"شناسه ثبت کانال: {row['id']}\n"
+            )
+
+        lines.append(
+            "⚠️ کانال از همکاری فعال خارج می‌شود؛ "
+            "سابقه درآمد و پاداش‌های قبلی باقی می‌ماند.\n"
             "برای لغو، /cancel را بفرست."
+        )
+
+        _send(
+            send_message,
+            chat_id,
+            "\n".join(lines),
+            _menu_keyboard()
         )
         return True
 
@@ -388,7 +535,8 @@ def handle_message(message, api, send_message):
             _send(
                 send_message,
                 chat_id,
-                "ثبت کانال لغو شد."
+                "ثبت کانال لغو شد.",
+                _menu_keyboard()
             )
             return True
 
@@ -409,9 +557,37 @@ def handle_message(message, api, send_message):
         )
         return True
 
+    if _states.get(user_id) == "waiting_delete_channel":
+        if text == "/cancel":
+            _states.pop(user_id, None)
+
+            _send(
+                send_message,
+                chat_id,
+                "عملیات حذف کانال لغو شد.",
+                _menu_keyboard()
+            )
+            return True
+
+        success, result_text = _remove_channel(
+            user_id,
+            text
+        )
+
+        if success:
+            _states.pop(user_id, None)
+
+        _send(
+            send_message,
+            chat_id,
+            result_text,
+            _menu_keyboard()
+        )
+        return True
+
     return False
 
 
 def handle_callback(callback, api, send_message):
-    # در این مرحله دکمهٔ درون‌پیامی مخصوص این فایل نداریم.
+    # این بخش فعلاً دکمه درون‌پیامی ندارد.
     return False
