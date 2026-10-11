@@ -1,4 +1,3 @@
-
 import time
 import threading
 import requests
@@ -13,6 +12,7 @@ from features import (
     force_join,
     admin_panel,
     backup,
+    partner_channels,  # کانال همکار
 )
 
 
@@ -112,6 +112,9 @@ def main_menu(user_id=None):
         [
             {"text": "👥 ممبر معمولی"},
             {"text": "🛡️ ممبر تضمینی"}
+        ],
+        [
+            {"text": "📢 کانال همکار"}  # کانال همکار
         ],
         [
             {"text": "📖 راهنما"}
@@ -294,6 +297,14 @@ def handle_message(message):
             send_message
         ):
             return
+
+    # کانال همکار: پس از بررسی دسترسی کاربر
+    if partner_channels.handle_message(
+        message,
+        api,
+        send_message
+    ):
+        return
 
     if daily_rewards.handle_message(
         text,
@@ -560,6 +571,10 @@ def main():
         return
 
     init_db()
+
+    # ساخت جدول‌های کانال همکار
+    partner_channels.init_tables()
+
     views.init_views_db()
     members.init_members_db()
     guaranteed_members.init_guaranteed_db()
