@@ -1,3 +1,4 @@
+
 import re
 
 from database import get_connection
@@ -263,8 +264,8 @@ def _add_channel(user_id, value, api):
         "✅ کانال با موفقیت ثبت و تأیید شد!\n\n"
         f"📢 نام کانال: {title}\n"
         f"🆔 شناسه کانال: {chat_id}\n\n"
-        "ثبت کانال انجام شد. انتشار سفارش‌ها در کانال‌های همکار "
-        "نیازمند اتصال بخش انتشار سفارش‌هاست."
+        "از این به بعد سفارش‌های جدید می‌تونن در کانال همکار منتشر بشن. "
+        "برای هر سفارش که با موفقیت در کانالت منتشر بشه، ۵ سکه پاداش می‌گیری."
     )
 
 
@@ -277,11 +278,11 @@ def _my_channels(user_id):
                 pc.username,
                 pc.title,
                 pc.status,
-                COALESCE(SUM(pe.amount), 0) AS earnings,
-                COUNT(pe.id) AS valid_actions
+                COALESCE(SUM(por.amount), 0) AS earnings,
+                COUNT(por.id) AS valid_actions
             FROM partner_channels pc
-            LEFT JOIN partner_earnings pe
-                ON pe.channel_id = pc.id
+            LEFT JOIN partner_order_rewards por
+                ON por.channel_id = pc.id
             WHERE pc.owner_id = ?
             GROUP BY pc.id
             ORDER BY pc.id DESC
@@ -310,7 +311,7 @@ def _my_channels(user_id):
             f"📢 {channel_name}\n"
             f"وضعیت: {status_text}\n"
             f"💰 درآمد ثبت‌شده: {row['earnings']} سکه\n"
-            f"✅ اقدامات معتبر: {row['valid_actions']}\n"
+            f"✅ سفارش‌های پاداش‌گرفته: {row['valid_actions']}\n"
         )
 
     return "\n".join(lines)
@@ -349,7 +350,7 @@ def handle_message(message, api, send_message):
             chat_id,
             "📢 بخش کانال‌های همکار\n\n"
             "از این بخش می‌تونی کانالت رو ثبت کنی و "
-            "وضعیت و آمار اولیه‌اش رو ببینی.",
+            "وضعیت و آمار درآمدش رو ببینی.",
             _menu_keyboard()
         )
         return True
