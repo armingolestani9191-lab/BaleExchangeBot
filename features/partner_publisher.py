@@ -1,4 +1,3 @@
-
 from database import get_connection
 
 
@@ -192,11 +191,11 @@ def publish_order(
     """
     انتشار سفارش در کانال اصلی و کانال‌های همکار فعال.
 
-    اگر انتشار در کانال اصلی ناموفق باشد، سفارش ناموفق اعلام می‌شود.
-    خطای یک کانال همکار، انتشار در کانال‌های دیگر را متوقف نمی‌کند.
+    پست اصلی و پست‌های همکار با forwardMessage منتشر می‌شوند
+    تا حالت فوروارد پیام اصلی حفظ شود.
     """
 
-    # ۱. انتشار پست اصلی در کانال سفارش‌ها
+    # ۱. فوروارد پست به کانال اصلی
     main_post = api("forwardMessage", {
         "chat_id": main_channel_id,
         "from_chat_id": source_chat_id,
@@ -207,14 +206,12 @@ def publish_order(
         print("Partner publisher: main post failed:", main_post)
         return {"ok": False}
 
-    main_post_id = (
-        main_post.get("result", {}).get("message_id")
-    )
+    main_post_id = main_post.get("result", {}).get("message_id")
 
     if not main_post_id:
         return {"ok": False}
 
-    # ۲. انتشار پیام اطلاعات و دکمه‌های سفارش
+    # ۲. انتشار پیام اطلاعات و دکمه‌های سفارش در کانال اصلی
     main_info = api("sendMessage", {
         "chat_id": main_channel_id,
         "text": info_text,
@@ -236,7 +233,7 @@ def publish_order(
         print("Partner publisher: main info failed:", main_info)
         return {"ok": False}
 
-    # ۳. ذخیرهٔ پیام‌های کانال اصلی
+    # ۳. ذخیره پیام‌های کانال اصلی
     save_order_message(
         order_id,
         main_channel_id,
@@ -245,7 +242,7 @@ def publish_order(
         order_type,
     )
 
-    # ۴. گرفتن کانال‌های همکار فعال
+    # ۴. دریافت کانال‌های همکار فعال
     with get_connection() as conn:
         partners = conn.execute("""
             SELECT chat_id
@@ -257,34 +254,40 @@ def publish_order(
     for partner in partners:
         partner_chat_id = partner["chat_id"]
 
-        # کانال اصلی نباید دوباره به عنوان همکار پردازش شود.
-        if str(partner_chat_id) == str(main_channel_id):
-            continue
+        # اگر شناسه کانال اصلی عددی باشد، از انتشار تکراری جلوگیری کن.
+        try:
+            if int(partner_chat_id) == int(main_channel_id):
+                continue
+        except (TypeError, ValueError):
+            # ممکن است شناسه کانال اصلی به‌شکل @username باشد.
+            pass
 
         try:
-            # کپی پست اصلی برای حفظ متن و رسانه
-            copied_post = api("copyMessage", {
+            # نکته مهم:
+            # از forwardMessage استفاده می‌کنیم، نه copyMessage.
+            # منبع همان پیام اصلی کاربر است تا سربرگ فوروارد حفظ شود.
+            partner_post = api("forwardMessage", {
                 "chat_id": partner_chat_id,
-                "from_chat_id": main_channel_id,
-                "message_id": main_post_id,
+                "from_chat_id": source_chat_id,
+                "message_id": source_message_id,
             })
 
-            if not copied_post or not copied_post.get("ok"):
+            if not partner_post or not partner_post.get("ok"):
                 print(
-                    "Partner publisher: copy failed:",
+                    "Partner publisher: forward failed:",
                     partner_chat_id,
-                    copied_post,
+                    partner_post,
                 )
                 continue
 
             partner_post_id = (
-                copied_post.get("result", {}).get("message_id")
+                partner_post.get("result", {}).get("message_id")
             )
 
             if not partner_post_id:
                 continue
 
-            # پیام اطلاعات و همان دکمه‌های سفارش
+            # پیام اطلاعات و دکمه‌های سفارش زیر پست فورواردشده
             partner_info = api("sendMessage", {
                 "chat_id": partner_chat_id,
                 "text": info_text,
@@ -299,10 +302,12 @@ def publish_order(
             )
 
             if not partner_info_id:
+                # اگر پیام اطلاعات ارسال نشد، پست ناقص را حذف کن.
                 api("deleteMessage", {
                     "chat_id": partner_chat_id,
                     "message_id": partner_post_id,
                 })
+
                 print(
                     "Partner publisher: info failed:",
                     partner_chat_id,
@@ -310,7 +315,7 @@ def publish_order(
                 )
                 continue
 
-            # پیام‌ها باید قبل از پاداش ذخیره شوند.
+            # ذخیره شناسه هر دو پیام برای به‌روزرسانی و حذف بعدی
             save_order_message(
                 order_id,
                 partner_chat_id,
@@ -319,7 +324,7 @@ def publish_order(
                 order_type,
             )
 
-            # پاداش فقط پس از انتشار موفق هر دو پیام داده می‌شود.
+            # پاداش فقط پس از ارسال موفق پست و پیام اطلاعات
             reward_partner_channel(
                 partner_chat_id,
                 order_type,
@@ -330,7 +335,7 @@ def publish_order(
             print(
                 "Partner publisher: channel error:",
                 partner_chat_id,
-                error,
+                repr(error),
             )
 
     return {
