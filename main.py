@@ -593,6 +593,36 @@ def start_guaranteed_membership_monitor():
     worker.start()
 
 
+def refresh_old_bot_links():
+    """
+    به‌روزرسانی لینک دکمه‌های قدیمی پس از شناسایی یوزرنیم فعلی.
+    توابع refresh در فایل‌های ویژگی به‌صورت مرحله‌ای اضافه می‌شوند.
+    """
+    modules = (
+        ("views", views),
+        ("members", members),
+        ("guaranteed_members", guaranteed_members),
+    )
+
+    for module_name, module in modules:
+        refresh_function = getattr(
+            module,
+            "refresh_bot_links",
+            None
+        )
+
+        if not callable(refresh_function):
+            continue
+
+        try:
+            refresh_function(api)
+        except Exception as error:
+            print(
+                f"Refreshing old bot links failed ({module_name}):",
+                repr(error)
+            )
+
+
 def main():
     if not BOT_TOKEN:
         print("ERROR: توکن ربات در config.py تنظیم نشده.")
@@ -623,11 +653,15 @@ def main():
     bot_id = bot.get("id")
     bot_username = bot.get("username")
 
+    # تنظیم شناسه و یوزرنیم ربات فعلی در ماژول‌های سفارش.
     views.set_bot_info(bot_id, bot_username)
     members.set_bot_info(bot_id, bot_username)
     guaranteed_members.set_bot_info(bot_id, bot_username)
 
     print("Bot connected:", bot_username or bot_id)
+
+    # لینک‌های قدیمی پس از اضافه‌شدن تابع مربوطه در هر فایل اصلاح می‌شوند.
+    refresh_old_bot_links()
 
     start_guaranteed_membership_monitor()
 
