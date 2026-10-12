@@ -6,7 +6,7 @@ import os
 # ==============================
 
 # توکن ربات بله را داخل کوتیشن قرار بده
-BOT_TOKEN = "848571933:f0aQ5uN_JgJgxH94pWvVS9ANgIiD8ramL_s"
+BOT_TOKEN = "1317131602:ls_krd2A3KBlwm9-v6plVAvoYihr3Z814BE"
 
 # شناسه عددی ادمین
 ADMIN_ID = 595450272
