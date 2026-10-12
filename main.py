@@ -1,4 +1,3 @@
-
 import time
 import threading
 import requests
@@ -15,7 +14,7 @@ from features import (
     admin_channel_stats,
     backup,
     partner_channels,
-    partner_publisher,  # انتشار سفارش در کانال‌های همکار
+    partner_publisher,
 )
 
 
@@ -117,7 +116,6 @@ def main_menu(user_id=None):
             {"text": "🛡️ ممبر تضمینی"}
         ],
         [
-            # باید دقیقاً با BTN_PARTNER در partner_channels.py یکی باشد.
             {"text": "📢 افزودن کانال"}
         ],
         [
@@ -260,8 +258,6 @@ def handle_message(message):
 
     register_user(user)
 
-    # آمار و مدیریت کانال‌های همکار
-    # پیش از پنل عمومی بررسی می‌شود تا دکمه خودش را بگیرد.
     if admin_channel_stats.handle_message(
         message,
         api,
@@ -269,7 +265,6 @@ def handle_message(message):
     ):
         return
 
-    # پنل ادمین باید پیش از پردازش قابلیت‌های عادی اجرا شود.
     if admin_panel.handle_message(
         message,
         api,
@@ -278,7 +273,6 @@ def handle_message(message):
     ):
         return
 
-    # کاربر بن‌شده به هیچ قابلیت ربات دسترسی ندارد.
     if admin_panel.is_banned(user_id):
         send_message(
             chat_id,
@@ -287,7 +281,6 @@ def handle_message(message):
         )
         return
 
-    # مدیریت قدیمی جوین اجباری حفظ می‌شود.
     if force_join.handle_admin_command(
         text,
         user_id,
@@ -301,7 +294,6 @@ def handle_message(message):
     if admin_give_coins(text, user_id, chat_id, send_message):
         return
 
-    # ادمین‌های پنل می‌توانند مدیریت کنند؛ کاربران عادی باید عضو باشند.
     if not admin_panel.is_admin(user_id):
         if not force_join.check_access(
             user_id,
@@ -311,7 +303,6 @@ def handle_message(message):
         ):
             return
 
-    # کانال همکار: پس از بررسی دسترسی کاربر
     if partner_channels.handle_message(
         message,
         api,
@@ -411,7 +402,6 @@ def handle_callback(callback):
     callback_id = callback.get("id")
     user_id = callback.get("from", {}).get("id")
 
-    # دکمه‌های آمار و مدیریت کانال‌های همکار
     if admin_channel_stats.handle_callback(
         callback,
         api,
@@ -420,8 +410,7 @@ def handle_callback(callback):
     ):
         return
 
-    # اصلاح گزارش: قبل از جوین اجباری پردازش شود.
-    # در غیر این صورت، به‌جای گزارش، پیام عضویت نمایش داده می‌شد.
+    # گزارش سفارش، مثل قبل مستقل پردازش می‌شود.
     if data.startswith("report:"):
         views.handle_callback_query(
             callback,
@@ -430,7 +419,6 @@ def handle_callback(callback):
         )
         return
 
-    # دکمه‌های گزارش مدیریتی فقط برای ادمین‌ها هستند.
     if data.startswith("reportban:"):
         if not user_id or not admin_panel.is_admin(user_id):
             if callback_id:
@@ -484,7 +472,6 @@ def handle_callback(callback):
             )
         return
 
-    # مدیریت دکمه‌های پنل حفظ می‌شود.
     if admin_panel.handle_callback(
         callback,
         api,
@@ -493,6 +480,7 @@ def handle_callback(callback):
     ):
         return
 
+    # دکمه بررسی عضویت مربوط به پیام جوین اجباری در خود ربات است.
     if force_join.handle_callback(
         callback,
         api,
@@ -502,7 +490,9 @@ def handle_callback(callback):
         return
 
     message = callback.get("message", {})
-    chat_id = message.get("chat", {}).get("id")
+    chat = message.get("chat", {})
+    chat_id = chat.get("id")
+    chat_type = chat.get("type")
 
     if not user_id or not chat_id:
         return
@@ -517,19 +507,35 @@ def handle_callback(callback):
         return
 
     if not admin_panel.is_admin(user_id):
-        if not force_join.check_access(
-            user_id,
-            chat_id,
-            api,
-            send_message
-        ):
-            if callback_id:
-                answer_callback(
-                    callback_id,
-                    "ابتدا عضو کانال‌های اجباری شو.",
-                    show_alert=True
-                )
-            return
+        if chat_type == "channel":
+            # مهم: در کانال هیچ پیام جوین اجباری ارسال نمی‌کنیم.
+            # فقط عضویت را بررسی می‌کنیم و در صورت نیاز هشدار دکمه‌ای می‌دهیم.
+            missing = force_join.missing_channels(api, user_id)
+
+            if missing:
+                if callback_id:
+                    answer_callback(
+                        callback_id,
+                        "برای استفاده از این دکمه، ابتدا عضویت اجباری را داخل ربات تکمیل کن.",
+                        show_alert=True
+                    )
+                return
+
+        else:
+            # پیام راهنمای جوین فقط در همان گفت‌وگوی خصوصی ربات نمایش داده می‌شود.
+            if not force_join.check_access(
+                user_id,
+                chat_id,
+                api,
+                send_message
+            ):
+                if callback_id:
+                    answer_callback(
+                        callback_id,
+                        "ابتدا عضو کانال‌های اجباری شو.",
+                        show_alert=True
+                    )
+                return
 
     if data.startswith("guaranteed_member_"):
         guaranteed_members.handle_callback_query(
@@ -594,10 +600,7 @@ def main():
 
     init_db()
 
-    # ساخت جدول‌های کانال همکار
     partner_channels.init_tables()
-
-    # ساخت جدول‌های انتشار سفارش و پاداش کانال همکار
     partner_publisher.init_tables()
 
     views.init_views_db()
