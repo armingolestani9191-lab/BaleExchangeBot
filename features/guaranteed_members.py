@@ -825,7 +825,6 @@ def check_guaranteed_memberships(api, send_message):
             """
         ).fetchall()
 
-    # تأیید دسترسی به هر کانال فقط یک بار در هر دور بررسی
     channel_cache = {}
 
     for claim in claims:
@@ -845,7 +844,6 @@ def check_guaranteed_memberships(api, send_message):
             )
 
         if not channel_cache[channel]:
-            # اگر خود کانال قابل بررسی نیست، کاربر را جریمه نکن.
             continue
 
         result = api("getChatMember", {
@@ -868,7 +866,11 @@ def check_guaranteed_memberships(api, send_message):
 
         else:
             description = _error_description(result).lower()
-            http_status = result.get("http_status") if isinstance(result, dict) else None
+            http_status = (
+                result.get("http_status")
+                if isinstance(result, dict)
+                else None
+            )
 
             if (
                 http_status == 404
@@ -876,7 +878,6 @@ def check_guaranteed_memberships(api, send_message):
             ):
                 is_member = False
             else:
-                # خطای نامشخص API نباید باعث جریمه شود.
                 print(
                     "Guaranteed monitoring skipped:",
                     {
@@ -887,7 +888,6 @@ def check_guaranteed_memberships(api, send_message):
                 )
                 continue
 
-        # اگر هنوز عضو است و ۴۸ ساعت گذشته، دیگر نیازی به بررسی نیست.
         if is_member is True:
             if not within_guarantee:
                 with get_connection() as conn:
@@ -902,9 +902,6 @@ def check_guaranteed_memberships(api, send_message):
                     )
             continue
 
-        # خروج بعد از پایان مهلت، جریمه و بازپرداخت ایجاد نمی‌کند.
-        # اگر اولین بار بعد از ۴۸ ساعت متوجه خروج شویم، زمان دقیق خروج
-        # قابل اثبات نیست؛ پس جریمه اعمال نمی‌شود.
         if not within_guarantee:
             with get_connection() as conn:
                 conn.execute(
@@ -928,7 +925,6 @@ def check_guaranteed_memberships(api, send_message):
         new_lost_count = None
         refund_amount = claim["total_cost"]
         owner_id = claim["owner_id"]
-        owner_chat = None
 
         with get_connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -949,7 +945,6 @@ def check_guaranteed_memberships(api, send_message):
             ):
                 continue
 
-            # ثبت خروج و جلوگیری از اعمال جریمه تکراری
             conn.execute(
                 """
                 UPDATE guaranteed_member_claims
@@ -1045,7 +1040,6 @@ def check_guaranteed_memberships(api, send_message):
                 "این بازپرداخت فقط یک بار انجام می‌شود."
             )
 
-        # فقط پیام‌های موجود را به‌روز کن؛ منطق فعلی ریزش تغییر نمی‌کند.
         if claim["channel_message_id"]:
             with get_connection() as conn:
                 latest = conn.execute(
@@ -1101,3 +1095,79 @@ def handle_callback_query(callback, api, send_message):
         )
 
     return True
+
+
+def refresh_bot_links(api):
+    """
+    به‌روزرسانی دکمه «رفتن به ربات» در سفارش‌های تضمینی فعال.
+    متن پیام تغییر نمی‌کند؛ فقط صفحه‌کلید پیام به‌روز می‌شود.
+    """
+    if not BOT_USERNAME:
+        print(
+            "Guaranteed members: BOT_USERNAME is empty; "
+            "link refresh skipped."
+        )
+        return
+
+    updated = 0
+    failed = 0
+
+    try:
+        with get_connection() as conn:
+            orders = conn.execute("""
+                SELECT
+                    id,
+                    channel_username,
+                    target_count,
+                    joined_count,
+                    lost_count
+                FROM guaranteed_member_orders
+                WHERE status = 'pending'
+            """).fetchall()
+
+        for row in orders:
+            order = dict(row)
+            order_id = order["id"]
+
+            # پیام‌های منتشرشده در کانال اصلی و کانال‌های همکار
+            with get_connection() as conn:
+                messages = conn.execute("""
+                    SELECT channel_id, info_message_id
+                    FROM text_order_channel_messages
+                    WHERE order_type = ?
+                      AND order_id = ?
+                    ORDER BY id
+                """, ("guaranteed_members", order_id)).fetchall()
+
+            keyboard = _order_keyboard(order)
+
+            for item in messages:
+                result = api("editMessageReplyMarkup", {
+                    "chat_id": item["channel_id"],
+                    "message_id": item["info_message_id"],
+                    "reply_markup": keyboard,
+                })
+
+                if result and result.get("ok"):
+                    updated += 1
+                else:
+                    failed += 1
+                    print(
+                        "Guaranteed members: bot-link refresh failed:",
+                        "order_id=", order_id,
+                        "channel_id=", item["channel_id"],
+                        "response=", result,
+                    )
+
+    except Exception as error:
+        print(
+            "Guaranteed members: bot-link refresh error:",
+            repr(error),
+        )
+        return
+
+    print(
+        "Guaranteed members: bot-link refresh finished:",
+        "updated=", updated,
+        "failed=", failed,
+    )
