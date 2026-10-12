@@ -804,3 +804,69 @@ def handle_callback_query(callback, api, send_message):
         )
 
     return True
+
+
+def refresh_bot_links(api):
+    """به‌روزرسانی لینک ربات در سفارش‌های فعال ممبر معمولی."""
+    if not BOT_USERNAME:
+        print(
+            "Members: BOT_USERNAME is empty; "
+            "link refresh skipped."
+        )
+        return
+
+    updated = 0
+    failed = 0
+
+    try:
+        with get_connection() as conn:
+            orders = conn.execute("""
+                SELECT id, channel_username, target_count, joined_count
+                FROM member_orders
+                WHERE status = 'pending'
+            """).fetchall()
+
+        for row in orders:
+            order = dict(row)
+            order_id = order["id"]
+
+            messages = partner_publisher._get_text_order_messages(
+                "members",
+                order_id,
+            )
+
+            if not messages:
+                continue
+
+            keyboard = _order_keyboard(order)
+
+            for item in messages:
+                result = api("editMessageReplyMarkup", {
+                    "chat_id": item["channel_id"],
+                    "message_id": item["info_message_id"],
+                    "reply_markup": keyboard,
+                })
+
+                if result and result.get("ok"):
+                    updated += 1
+                else:
+                    failed += 1
+                    print(
+                        "Members: bot-link refresh failed:",
+                        "order_id=", order_id,
+                        "channel_id=", item["channel_id"],
+                        "response=", result,
+                    )
+
+    except Exception as error:
+        print(
+            "Members: bot-link refresh error:",
+            repr(error),
+        )
+        return
+
+    print(
+        "Members: bot-link refresh finished:",
+        "updated=", updated,
+        "failed=", failed,
+    )
