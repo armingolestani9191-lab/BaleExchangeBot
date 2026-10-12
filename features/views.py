@@ -124,6 +124,121 @@ def order_keyboard(order_id):
     return {"inline_keyboard": keyboard}
 
 
+def refresh_bot_links(api):
+    """
+    به‌روزرسانی لینک دکمه‌های سفارش سین فعال در کانال‌ها.
+    متن پیام و اطلاعات سفارش تغییر نمی‌کند.
+    """
+    if not BOT_USERNAME:
+        print(
+            "Views link refresh skipped: "
+            "current bot username is unavailable."
+        )
+        return 0
+
+    try:
+        with get_connection() as conn:
+            rows = conn.execute("""
+                SELECT id
+                FROM orders
+                WHERE order_type = 'views'
+                  AND status = 'pending'
+                ORDER BY id
+            """).fetchall()
+
+        order_ids = [row["id"] for row in rows]
+
+    except Exception as error:
+        print("Views link refresh: database error:", repr(error))
+        return 0
+
+    if not order_ids:
+        print("Views link refresh: no pending orders found.")
+        return 0
+
+    updated = 0
+    failed = 0
+
+    def refresh_one(item):
+        order_id = item["order_id"]
+        saved = item["saved"]
+
+        if not saved.get("info_message_id"):
+            return False
+
+        result = api(
+            "editMessageReplyMarkup",
+            {
+                "chat_id": saved["channel_id"],
+                "message_id": saved["info_message_id"],
+                "reply_markup": order_keyboard(order_id)
+            }
+        )
+
+        if result and result.get("ok"):
+            return True
+
+        print(
+            "Views link refresh failed:",
+            "order_id=", order_id,
+            "channel_id=", saved.get("channel_id"),
+            "message_id=", saved.get("info_message_id"),
+            "response=", result
+        )
+        return False
+
+    tasks = []
+
+    for order_id in order_ids:
+        try:
+            saved_messages = partner_publisher.get_order_messages(
+                order_id
+            )
+
+            for saved in saved_messages or []:
+                tasks.append({
+                    "order_id": order_id,
+                    "saved": saved
+                })
+
+        except Exception as error:
+            failed += 1
+            print(
+                "Views link refresh: could not load saved messages:",
+                order_id,
+                repr(error)
+            )
+
+    if not tasks:
+        print("Views link refresh: no saved channel messages found.")
+        return 0
+
+    futures = [
+        _VIEWS_MESSAGE_POOL.submit(refresh_one, item)
+        for item in tasks
+    ]
+
+    for future in futures:
+        try:
+            if future.result():
+                updated += 1
+            else:
+                failed += 1
+        except Exception as error:
+            failed += 1
+            print(
+                "Views link refresh: unexpected error:",
+                repr(error)
+            )
+
+    print(
+        "Views link refresh completed:",
+        f"updated={updated}, failed={failed}, total={len(tasks)}"
+    )
+
+    return updated
+
+
 def start_order(user_id, chat_id, send_message):
     set_state(user_id, "waiting_post")
 
