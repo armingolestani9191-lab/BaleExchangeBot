@@ -1,14 +1,21 @@
-
 <!DOCTYPE html>
 <html lang="fa" dir="rtl">
+
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="theme-color" content="#f5f7ff">
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
+
+    <meta name="theme-color" content="#080D0A">
 
     <title>Bale Exchange</title>
 
     <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="orders.css">
+
     <script src="https://tapi.bale.ai/miniapp.js?3"></script>
 </head>
 
@@ -18,135 +25,106 @@
 
         <!-- هدر -->
         <header class="header">
-            <button class="header-icon" aria-label="بازگشت">‹</button>
+
+            <button
+                class="header-icon"
+                id="refreshButton"
+                aria-label="تازه‌سازی سفارش‌ها"
+            >
+                ↻
+            </button>
 
             <div class="brand">
                 <span class="brand-gem">💎</span>
                 <span>Bale Exchange</span>
             </div>
 
-            <button class="header-icon menu-button" aria-label="منو">⋮</button>
+            <div class="balance-box">
+                <span>🪙</span>
+                <strong id="userBalance">---</strong>
+            </div>
+
         </header>
 
 
-        <!-- محتوای اصلی -->
-        <section class="main-content">
+        <!-- عنوان صفحه -->
+        <section class="home-heading">
 
-            <!-- کارت اطلاعات کانال -->
-            <article class="channel-card" id="orderCard">
+            <div>
+                <h1>سفارش‌های فعال</h1>
 
-                <div class="channel-avatar-wrapper">
-                    <div class="channel-avatar" id="channelAvatar">B</div>
-                    <span class="verified-icon">✓</span>
-                </div>
-
-                <div class="channel-details">
-                    <h1 id="channelName">در حال دریافت اطلاعات...</h1>
-                    <span id="channelUsername">---</span>
-                </div>
-
-                <p class="channel-description">
-                    برای دریافت پاداش، در کانال موردنظر عضو شوید.
+                <p>
+                    عضو کانال شو و پاداش بگیر
                 </p>
+            </div>
 
-                <!-- اطلاعات سفارش -->
-                <div class="order-summary">
-
-                    <div class="summary-item reward-summary">
-                        <span class="summary-icon">🪙</span>
-
-                        <div>
-                            <strong id="orderReward">---</strong>
-                            <small>پاداش عضویت</small>
-                        </div>
-                    </div>
-
-                    <div class="summary-divider"></div>
-
-                    <div class="summary-item type-summary">
-                        <span class="summary-icon">🛡️</span>
-
-                        <div>
-                            <strong id="orderType">---</strong>
-                            <small>نوع سفارش</small>
-                        </div>
-                    </div>
-
-                </div>
-
-            </article>
-
-
-            <!-- جزئیات سفارش -->
-            <section class="details-section">
-
-                <div class="section-heading">
-                    <h2>جزئیات سفارش</h2>
-                    <span class="info-icon">ⓘ</span>
-                </div>
-
-                <div class="detail-row">
-                    <span class="detail-check">✓</span>
-                    <span>عضویت در کانال</span>
-                    <span class="telegram-icon">➤</span>
-                </div>
-
-            </section>
-
-
-            <!-- هشدار سفارش تضمینی -->
-            <section class="guarantee-warning" id="guaranteeWarning" hidden>
-
-                <div class="warning-heading">
-                    <span class="warning-icon">⚠</span>
-                    <strong>هشدار مهم!</strong>
-                </div>
-
-                <p id="guaranteeText">
-                    شرایط این سفارش را پیش از عضویت مطالعه کنید.
-                </p>
-
-            </section>
-
-
-            <!-- دکمه رفتن به کانال -->
-            <section class="main-action">
-                <button class="join-button" id="joinButton">
-                    <span>رفتن به کانال</span>
-                    <span class="telegram-icon">➤</span>
-                </button>
-
-                <button class="check-button" id="checkButton">
-                    بررسی عضویت
-                </button>
-            </section>
-
-            <p class="status-text" id="orderCount">
-                در حال بارگذاری سفارش‌ها...
-            </p>
+            <span class="live-indicator">
+                <i></i>
+                زنده
+            </span>
 
         </section>
+
+
+        <!-- فهرست سفارش‌ها -->
+        <section
+            class="orders-list"
+            id="ordersContainer"
+        >
+
+            <div class="loading-box">
+
+                <div class="loading-spinner"></div>
+
+                <p>
+                    در حال دریافت سفارش‌ها...
+                </p>
+
+            </div>
+
+        </section>
+
+
+        <!-- وضعیت سفارش‌ها -->
+        <p
+            class="status-text"
+            id="orderCount"
+        >
+            در حال بارگذاری...
+        </p>
 
 
         <!-- منوی پایین -->
         <nav class="bottom-nav">
 
-            <button class="nav-item active" data-page="home">
+            <button
+                class="nav-item active"
+                data-page="home"
+            >
                 <span class="nav-icon">⌂</span>
                 <small>خانه</small>
             </button>
 
-            <button class="nav-item" data-page="orders">
+            <button
+                class="nav-item"
+                data-page="orders"
+            >
                 <span class="nav-icon">☷</span>
                 <small>سفارش‌ها</small>
             </button>
 
-            <button class="nav-item" data-page="wallet">
+            <button
+                class="nav-item"
+                data-page="wallet"
+            >
                 <span class="nav-icon">▱</span>
                 <small>کیف پول</small>
             </button>
 
-            <button class="nav-item" data-page="profile">
+            <button
+                class="nav-item"
+                data-page="profile"
+            >
                 <span class="nav-icon">♙</span>
                 <small>حساب کاربری</small>
             </button>
@@ -154,6 +132,25 @@
         </nav>
 
     </main>
+
+
+    <!-- اعلان دریافت پاداش -->
+    <div
+        class="reward-toast"
+        id="rewardToast"
+        role="status"
+        aria-live="polite"
+    >
+
+        <span class="toast-icon">✓</span>
+
+        <div>
+            <strong>پاداش دریافت شد!</strong>
+            <p id="toastMessage"></p>
+        </div>
+
+    </div>
+
 
     <script src="app.js"></script>
 

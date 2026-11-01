@@ -1,0 +1,670 @@
+/* ==========================================
+   BALE EXCHANGE - ORDERS UI
+   کارت سفارش‌ها و نمایش زنده
+========================================== */
+
+
+/* ==========================================
+   HEADER
+========================================== */
+
+.balance-box {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+
+    min-width: 75px;
+    padding: 9px 12px;
+
+    background: rgba(0, 201, 139, 0.09);
+    border: 1px solid rgba(0, 201, 139, 0.2);
+    border-radius: 14px;
+
+    color: var(--primary-light);
+    font-size: 13px;
+}
+
+.balance-box strong {
+    font-family: 'Estedad', sans-serif;
+    font-weight: 800;
+}
+
+
+/* ==========================================
+   HOME HEADING
+========================================== */
+
+.home-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+
+    margin: 10px 0 0;
+
+    animation: fadeUp 0.5s ease both;
+}
+
+.home-heading h1 {
+    font-family: 'Estedad', sans-serif;
+    font-size: 21px;
+    font-weight: 900;
+    color: var(--text);
+}
+
+.home-heading p {
+    margin-top: 5px;
+
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 500;
+}
+
+
+/* ==========================================
+   LIVE INDICATOR
+========================================== */
+
+.live-indicator {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+
+    padding: 7px 11px;
+
+    border-radius: 30px;
+
+    background: rgba(0, 201, 139, 0.09);
+    border: 1px solid rgba(0, 201, 139, 0.2);
+
+    color: var(--primary-light);
+
+    font-size: 11px;
+    font-weight: 800;
+}
+
+.live-indicator i {
+    width: 7px;
+    height: 7px;
+
+    border-radius: 50%;
+
+    background: var(--primary);
+
+    box-shadow: 0 0 10px var(--primary);
+
+    animation: livePulse 1.4s infinite;
+}
+
+
+/* ==========================================
+   ORDERS LIST
+========================================== */
+
+.orders-list {
+    display: flex;
+    flex-direction: column;
+    gap: 95px;
+
+    width: 100%;
+
+    margin-top: 85px;
+}
+
+.order-card {
+    width: 100%;
+    margin-top: 0 !important;
+
+    animation: orderAppear 0.55s ease both;
+}
+
+.order-card:not(:first-child) {
+    animation-delay: 0.05s;
+}
+
+
+/* ==========================================
+   CHANNEL AVATAR
+========================================== */
+
+.order-card .channel-avatar-wrapper {
+    width: 150px;
+    height: 150px;
+}
+
+.order-card .channel-avatar {
+    overflow: hidden;
+}
+
+.order-avatar-image {
+    display: block;
+
+    width: 100%;
+    height: 100%;
+
+    object-fit: cover;
+    border-radius: 50%;
+}
+
+.avatar-fallback {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    width: 100%;
+    height: 100%;
+
+    border-radius: 50%;
+
+    background:
+        linear-gradient(
+            145deg,
+            #1B4934,
+            #09150F
+        );
+
+    color: var(--primary-light);
+
+    font-family: 'Estedad', sans-serif;
+    font-size: 43px;
+    font-weight: 900;
+}
+
+
+/* ==========================================
+   ORDER DETAILS
+========================================== */
+
+.order-details {
+    margin-top: 30px;
+}
+
+.order-details .section-heading {
+    margin-bottom: 16px;
+}
+
+.order-progress-box {
+    padding: 19px;
+
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+
+    box-shadow: var(--shadow);
+}
+
+.progress-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+
+    margin-bottom: 15px;
+
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.progress-header strong {
+    direction: ltr;
+
+    color: var(--primary-light);
+
+    font-family: 'Estedad', sans-serif;
+    font-size: 16px;
+    font-weight: 900;
+}
+
+.progress-track {
+    width: 100%;
+    height: 8px;
+
+    overflow: hidden;
+
+    background: #1C2A21;
+    border-radius: 20px;
+}
+
+.progress-fill {
+    height: 100%;
+
+    border-radius: 20px;
+
+    background:
+        linear-gradient(
+            90deg,
+            #009B6B,
+            #55E6B1
+        );
+
+    box-shadow: 0 0 12px rgba(0, 201, 139, 0.3);
+
+    transition: width 0.7s ease;
+}
+
+
+/* ==========================================
+   LIVE STATUS
+========================================== */
+
+.live-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+
+    margin-top: 15px;
+
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.live-dot {
+    width: 8px;
+    height: 8px;
+
+    flex-shrink: 0;
+
+    border-radius: 50%;
+
+    background: #00D99A;
+
+    box-shadow: 0 0 10px rgba(0, 217, 154, 0.7);
+
+    animation: livePulse 1.3s infinite;
+}
+
+
+/* ==========================================
+   ORDER INFORMATION ROWS
+========================================== */
+
+.order-info-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+
+    min-height: 57px;
+
+    margin-top: 10px;
+    padding: 13px 17px;
+
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 17px;
+
+    color: #C8D8CE;
+    font-size: 12px;
+    font-weight: 600;
+
+    transition:
+        background 0.25s ease,
+        border-color 0.25s ease;
+}
+
+.order-info-row:hover {
+    background: var(--surface-2);
+    border-color: rgba(0, 201, 139, 0.2);
+}
+
+.order-info-row strong {
+    color: var(--primary-light);
+
+    font-family: 'Estedad', sans-serif;
+    font-size: 13px;
+    font-weight: 800;
+}
+
+.order-info-row .lost-count {
+    color: var(--danger);
+}
+
+
+/* ==========================================
+   GUARANTEE WARNING
+========================================== */
+
+.order-card .guarantee-warning {
+    margin-top: 19px;
+
+    background: rgba(245, 185, 76, 0.07);
+    border-color: rgba(245, 185, 76, 0.23);
+}
+
+.order-card .guarantee-warning strong {
+    color: var(--warning);
+}
+
+
+/* ==========================================
+   ORDER ACTIONS
+========================================== */
+
+.order-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 11px;
+
+    margin-top: 23px;
+}
+
+.order-actions .join-button {
+    width: 100%;
+    min-height: 65px;
+}
+
+.order-actions .check-button {
+    width: 100%;
+    min-height: 56px;
+
+    margin-top: 0;
+}
+
+.order-actions button:disabled {
+    opacity: 0.6;
+    cursor: wait;
+}
+
+
+/* ==========================================
+   EMPTY ORDERS
+========================================== */
+
+.empty-orders {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+
+    min-height: 260px;
+
+    padding: 30px 22px;
+
+    text-align: center;
+
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 25px;
+
+    animation: fadeUp 0.5s ease both;
+}
+
+.empty-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    width: 75px;
+    height: 75px;
+
+    margin-bottom: 18px;
+
+    border-radius: 24px;
+
+    background: rgba(0, 201, 139, 0.09);
+
+    font-size: 34px;
+}
+
+.empty-orders h2 {
+    color: var(--text);
+
+    font-family: 'Estedad', sans-serif;
+    font-size: 16px;
+    font-weight: 800;
+}
+
+.empty-orders p {
+    margin-top: 10px;
+
+    color: var(--muted);
+
+    font-size: 12px;
+    line-height: 2;
+}
+
+.empty-orders .check-button {
+    max-width: 220px;
+    margin-top: 20px;
+}
+
+.error-box .empty-icon {
+    background: rgba(255, 114, 114, 0.1);
+}
+
+
+/* ==========================================
+   LOADING
+========================================== */
+
+.loading-box {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+
+    min-height: 220px;
+
+    color: var(--muted);
+    font-size: 13px;
+}
+
+.loading-spinner {
+    width: 39px;
+    height: 39px;
+
+    margin-bottom: 17px;
+
+    border: 3px solid rgba(0, 201, 139, 0.12);
+    border-top-color: var(--primary);
+
+    border-radius: 50%;
+
+    animation: spinnerRotate 0.8s linear infinite;
+}
+
+
+/* ==========================================
+   REWARD TOAST
+========================================== */
+
+.reward-toast {
+    position: fixed;
+
+    top: calc(15px + env(safe-area-inset-top));
+    left: 50%;
+
+    z-index: 1000;
+
+    display: flex;
+    align-items: center;
+    gap: 13px;
+
+    width: calc(100% - 32px);
+    max-width: 440px;
+
+    padding: 15px 17px;
+
+    background: rgba(17, 34, 25, 0.97);
+
+    border: 1px solid rgba(0, 201, 139, 0.35);
+    border-radius: 19px;
+
+    box-shadow:
+        0 15px 45px rgba(0, 0, 0, 0.4),
+        0 0 25px rgba(0, 201, 139, 0.08);
+
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+
+    opacity: 0;
+
+    pointer-events: none;
+
+    transform: translate(-50%, -25px);
+
+    transition:
+        opacity 0.35s ease,
+        transform 0.35s ease;
+}
+
+.reward-toast.show {
+    opacity: 1;
+
+    transform: translate(-50%, 0);
+}
+
+.toast-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    width: 39px;
+    height: 39px;
+
+    flex-shrink: 0;
+
+    border-radius: 14px;
+
+    background: rgba(0, 201, 139, 0.15);
+
+    color: var(--primary-light);
+
+    font-size: 22px;
+    font-weight: 900;
+}
+
+.reward-toast strong {
+    color: var(--primary-light);
+
+    font-family: 'Estedad', sans-serif;
+    font-size: 13px;
+    font-weight: 900;
+}
+
+.reward-toast p {
+    margin-top: 4px;
+
+    color: #D4E4DA;
+
+    font-size: 11px;
+    font-weight: 500;
+}
+
+
+/* ==========================================
+   ANIMATIONS
+========================================== */
+
+@keyframes livePulse {
+
+    0% {
+        opacity: 1;
+        transform: scale(1);
+    }
+
+    50% {
+        opacity: 0.45;
+        transform: scale(0.75);
+    }
+
+    100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+
+}
+
+@keyframes spinnerRotate {
+
+    to {
+        transform: rotate(360deg);
+    }
+
+}
+
+@keyframes orderAppear {
+
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+
+}
+
+
+/* ==========================================
+   RESPONSIVE
+========================================== */
+
+@media (max-width: 390px) {
+
+    .home-heading h1 {
+        font-size: 19px;
+    }
+
+    .order-card .channel-avatar-wrapper {
+        width: 135px;
+        height: 135px;
+    }
+
+    .order-info-row {
+        padding: 12px 13px;
+        font-size: 11px;
+    }
+
+    .progress-header {
+        font-size: 11px;
+    }
+
+    .reward-toast {
+        padding: 13px;
+    }
+
+}
+
+@media (max-width: 340px) {
+
+    .home-heading {
+        align-items: flex-start;
+    }
+
+    .live-indicator {
+        padding: 6px 8px;
+        font-size: 10px;
+    }
+
+    .order-card .channel-avatar-wrapper {
+        width: 125px;
+        height: 125px;
+    }
+
+}
+
+
+/* ==========================================
+   ACCESSIBILITY
+========================================== */
+
+@media (prefers-reduced-motion: reduce) {
+
+    .live-dot,
+    .live-indicator i,
+    .loading-spinner {
+        animation: none !important;
+    }
+
+    .reward-toast,
+    .progress-fill {
+        transition: none !important;
+    }
+
+}
