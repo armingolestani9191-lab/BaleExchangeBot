@@ -1,1 +1,904 @@
+import json
+from concurrent.futures import ThreadPoolExecutor
 
+from database import get_connection
+from config import ORDER_CHANNEL, ADMIN_ID
+from features import partner_publisher
+
+
+MAX_ORDER_COUNT = 10000
+
+BOT_ID = None
+BOT_USERNAME = None
+
+# استخر مشترک برای عملیات پیام‌های سفارش سین
+_VIEWS_MESSAGE_POOL = ThreadPoolExecutor(max_workers=12)
+
+
+COMPLETED_ORDER_MESSAGE = """🎉 تبریک!
+
+👁️ سفارش سینت با موفقیت تکمیل شد!
+✅ تمام سین‌های درخواستی ثبت شدن.
+📩 پست سفارش از کانال حذف شد.
+
+💡 حالا می‌تونی:
+• 🪙 دوباره سکه جمع کنی
+• 👁️ سفارش سین جدید ثبت کنی
+• 🚀 اگه سکه داری، همین الان سفارش بعدیت رو ثبت کن!
+
+❤️ ممنون که از ربات ما استفاده می‌کنی."""
+
+
+def set_bot_info(bot_id, username):
+    global BOT_ID, BOT_USERNAME
+    BOT_ID = bot_id
+    BOT_USERNAME = (username or "").lstrip("@")
+
+
+def init_views_db():
+    with get_connection() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS user_states (
+                user_id INTEGER PRIMARY KEY,
+                state TEXT NOT NULL,
+                payload TEXT NOT NULL DEFAULT '{}'
+            )
+        """)
+
+
+def set_state(user_id, state, payload=None):
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO user_states (user_id, state, payload)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                state = excluded.state,
+                payload = excluded.payload
+            """,
+            (
+                user_id,
+                state,
+                json.dumps(payload or {}, ensure_ascii=False)
+            )
+        )
+
+
+def get_state(user_id):
+    with get_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT state, payload
+            FROM user_states
+            WHERE user_id = ?
+            """,
+            (user_id,)
+        ).fetchone()
+
+    if not row:
+        return None, {}
+
+    return row["state"], json.loads(row["payload"])
+
+
+def clear_state(user_id):
+    with get_connection() as conn:
+        conn.execute(
+            "DELETE FROM user_states WHERE user_id = ?",
+            (user_id,)
+        )
+
+
+def answer_callback(api, callback_id, text):
+    api(
+        "answerCallbackQuery",
+        {
+            "callback_query_id": callback_id,
+            "text": text
+        }
+    )
+
+
+def order_keyboard(order_id):
+    keyboard = [
+        [
+            {
+                "text": "👁️ دیدم",
+                "callback_data": f"seen:{order_id}"
+            },
+            {
+                "text": "🚩 گزارش",
+                "callback_data": f"report:{order_id}"
+            }
+        ]
+    ]
+
+    if BOT_USERNAME:
+        keyboard.append([
+            {
+                "text": "🤖 رفتن به ربات",
+                "url": f"https://ble.ir/{BOT_USERNAME}"
+            }
+        ])
+
+    return {"inline_keyboard": keyboard}
+
+
+def refresh_bot_links(api):
+    """
+    به‌روزرسانی لینک دکمه‌های سفارش سین فعال در کانال‌ها.
+    متن پیام و اطلاعات سفارش تغییر نمی‌کند.
+    """
+    if not BOT_USERNAME:
+        print(
+            "Views link refresh skipped: "
+            "current bot username is unavailable."
+        )
+        return 0
+
+    try:
+        with get_connection() as conn:
+            rows = conn.execute("""
+                SELECT id
+                FROM orders
+                WHERE order_type = 'views'
+                  AND status = 'pending'
+                ORDER BY id
+            """).fetchall()
+
+        order_ids = [row["id"] for row in rows]
+
+    except Exception as error:
+        print("Views link refresh: database error:", repr(error))
+        return 0
+
+    if not order_ids:
+        print("Views link refresh: no pending orders found.")
+        return 0
+
+    updated = 0
+    failed = 0
+
+    def refresh_one(item):
+        order_id = item["order_id"]
+        saved = item["saved"]
+
+        if not saved.get("info_message_id"):
+            return False
+
+        result = api(
+            "editMessageReplyMarkup",
+            {
+                "chat_id": saved["channel_id"],
+                "message_id": saved["info_message_id"],
+                "reply_markup": order_keyboard(order_id)
+            }
+        )
+
+        if result and result.get("ok"):
+            return True
+
+        print(
+            "Views link refresh failed:",
+            "order_id=", order_id,
+            "channel_id=", saved.get("channel_id"),
+            "message_id=", saved.get("info_message_id"),
+            "response=", result
+        )
+        return False
+
+    tasks = []
+
+    for order_id in order_ids:
+        try:
+            saved_messages = partner_publisher.get_order_messages(
+                order_id
+            )
+
+            for saved in saved_messages or []:
+                tasks.append({
+                    "order_id": order_id,
+                    "saved": saved
+                })
+
+        except Exception as error:
+            failed += 1
+            print(
+                "Views link refresh: could not load saved messages:",
+                order_id,
+                repr(error)
+            )
+
+    if not tasks:
+        print("Views link refresh: no saved channel messages found.")
+        return 0
+
+    futures = [
+        _VIEWS_MESSAGE_POOL.submit(refresh_one, item)
+        for item in tasks
+    ]
+
+    for future in futures:
+        try:
+            if future.result():
+                updated += 1
+            else:
+                failed += 1
+        except Exception as error:
+            failed += 1
+            print(
+                "Views link refresh: unexpected error:",
+                repr(error)
+            )
+
+    print(
+        "Views link refresh completed:",
+        f"updated={updated}, failed={failed}, total={len(tasks)}"
+    )
+
+    return updated
+
+
+def start_order(user_id, chat_id, send_message):
+    set_state(user_id, "waiting_post")
+
+    send_message(
+        chat_id,
+        "🛒 سفارش جدید سین\n\n"
+        "پست موردنظرت رو از کانالت فوروارد کن.\n\n"
+        "بعد از دریافت پست، تعداد سین موردنظرت رو وارد کن.\n\n"
+        "💰 هزینه: هر کلیک یکتا = ۱ سکه\n\n"
+        "برای لغو بنویس /cancel"
+    )
+
+
+def handle_message(message, api, send_message):
+    user = message.get("from", {})
+    chat = message.get("chat", {})
+    text = (message.get("text") or "").strip()
+
+    user_id = user.get("id")
+    chat_id = chat.get("id")
+
+    if not user_id or not chat_id:
+        return False
+
+    state, payload = get_state(user_id)
+
+    if text in ("/cancel", "لغو سفارش"):
+        if state:
+            clear_state(user_id)
+
+            send_message(
+                chat_id,
+                "❌ مرحلهٔ فعلی لغو شد."
+            )
+            return True
+
+        return False
+
+    if state == "waiting_post":
+        if (
+            not message.get("forward_origin")
+            and not message.get("forward_from_chat")
+        ):
+            send_message(
+                chat_id,
+                "⚠️ لطفاً پست موردنظرت رو از کانالت فوروارد کن."
+            )
+            return True
+
+        set_state(
+            user_id,
+            "waiting_count",
+            {
+                "source_chat_id": chat_id,
+                "source_message_id": message.get("message_id")
+            }
+        )
+
+        send_message(
+            chat_id,
+            "🔢 حالا تعداد سین موردنظرت رو وارد کن.\n\n"
+            f"حداکثر تعداد: {MAX_ORDER_COUNT:,}\n"
+            "💰 هزینهٔ هر کلیک یکتا: ۱ سکه"
+        )
+
+        return True
+
+    if state == "waiting_count":
+        try:
+            target_count = int(text)
+        except (ValueError, TypeError):
+            send_message(
+                chat_id,
+                "⚠️ لطفاً تعداد رو فقط به‌صورت عدد وارد کن."
+            )
+            return True
+
+        if target_count < 1 or target_count > MAX_ORDER_COUNT:
+            send_message(
+                chat_id,
+                f"⚠️ تعداد باید بین ۱ تا {MAX_ORDER_COUNT:,} باشه."
+            )
+            return True
+
+        total_cost = target_count
+
+        with get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+
+            user_row = conn.execute(
+                "SELECT coins FROM users WHERE user_id = ?",
+                (user_id,)
+            ).fetchone()
+
+            if not user_row or user_row["coins"] < total_cost:
+                current_coins = (
+                    user_row["coins"] if user_row else 0
+                )
+
+                conn.commit()
+
+                send_message(
+                    chat_id,
+                    "❌ سکهٔ کافی نداری!\n\n"
+                    f"💰 موجودی فعلی: {current_coins} سکه\n"
+                    f"💸 هزینهٔ سفارش: {total_cost} سکه"
+                )
+                return True
+
+            conn.execute(
+                """
+                UPDATE users
+                SET coins = coins - ?
+                WHERE user_id = ?
+                """,
+                (total_cost, user_id)
+            )
+
+            cursor = conn.execute(
+                """
+                INSERT INTO orders (
+                    user_id,
+                    order_type,
+                    target_count,
+                    counted_count,
+                    status
+                )
+                VALUES (?, 'views', ?, 0, 'pending')
+                """,
+                (user_id, target_count)
+            )
+
+            order_id = cursor.lastrowid
+            conn.commit()
+
+        published = partner_publisher.publish_order(
+            api=api,
+            order_id=order_id,
+            source_chat_id=payload["source_chat_id"],
+            source_message_id=payload["source_message_id"],
+            info_text=(
+                f"📋 **سفارش سین**\n\n"
+                f"👤 سین درخواستی: {target_count}\n"
+                f"👁️ سین خورده: 0\n"
+                f"#{order_id}"
+            ),
+            reply_markup=order_keyboard(order_id),
+            main_channel_id=ORDER_CHANNEL,
+            order_type="views"
+        )
+
+        if not published or not published.get("ok"):
+            with get_connection() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+
+                conn.execute(
+                    """
+                    UPDATE users
+                    SET coins = coins + ?
+                    WHERE user_id = ?
+                    """,
+                    (total_cost, user_id)
+                )
+
+                conn.execute(
+                    "DELETE FROM orders WHERE id = ?",
+                    (order_id,)
+                )
+
+                conn.commit()
+
+            clear_state(user_id)
+
+            send_message(
+                chat_id,
+                "❌ انتشار سفارش در کانال ناموفق بود.\n"
+                "سکه‌های سفارش به حسابت برگردونده شدن."
+            )
+            return True
+
+        channel_message_id = published.get("channel_message_id")
+        info_message_id = published.get("info_message_id")
+
+        if not channel_message_id or not info_message_id:
+            with get_connection() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+
+                conn.execute(
+                    """
+                    UPDATE users
+                    SET coins = coins + ?
+                    WHERE user_id = ?
+                    """,
+                    (total_cost, user_id)
+                )
+
+                conn.execute(
+                    "DELETE FROM orders WHERE id = ?",
+                    (order_id,)
+                )
+
+                conn.commit()
+
+            clear_state(user_id)
+
+            send_message(
+                chat_id,
+                "❌ اطلاعات پیام سفارش دریافت نشد.\n"
+                "سکه‌های سفارش به حسابت برگردونده شدن."
+            )
+            return True
+
+        with get_connection() as conn:
+            conn.execute(
+                """
+                UPDATE orders
+                SET channel_message_id = ?,
+                    info_message_id = ?
+                WHERE id = ?
+                """,
+                (
+                    channel_message_id,
+                    info_message_id,
+                    order_id
+                )
+            )
+
+        clear_state(user_id)
+
+        send_message(
+            chat_id,
+            "✅ سفارشت با موفقیت ثبت شد!\n\n"
+            f"🆔 شماره سفارش: {order_id}\n"
+            f"👁️ تعداد درخواستی: {target_count}\n"
+            f"💰 هزینه: {total_cost} سکه"
+        )
+
+        return True
+
+    return False
+
+
+def _run_parallel_message_actions(messages, action, error_label):
+    """
+    اجرای هم‌زمان عملیات پیام‌ها در کانال‌های مختلف.
+    نتیجهٔ هر عملیات برای حفظ رفتار فعلی بررسی می‌شود.
+    """
+    if not messages:
+        return []
+
+    futures = [
+        _VIEWS_MESSAGE_POOL.submit(action, item)
+        for item in messages
+    ]
+
+    results = []
+
+    for item, future in zip(messages, futures):
+        try:
+            result = future.result()
+        except Exception as error:
+            print(
+                f"{error_label}:",
+                item.get("channel_id"),
+                repr(error)
+            )
+            result = None
+
+        results.append(result)
+
+    return results
+
+
+def handle_callback_query(callback, api, send_message):
+    callback_id = callback.get("id")
+    user = callback.get("from", {})
+    user_id = user.get("id")
+    data = callback.get("data", "")
+    callback_message = callback.get("message", {})
+
+    if not callback_id or not user_id:
+        return False
+
+    if data.startswith("seen:"):
+        try:
+            order_id = int(data.split(":", 1)[1])
+        except (ValueError, IndexError):
+            answer_callback(api, callback_id, "❌ سفارش نامعتبره.")
+            return True
+
+        completed = False
+        new_count = 0
+        owner_id = None
+        channel_message_id = None
+        info_message_id = None
+        target_count = 0
+
+        with get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+
+            order = conn.execute(
+                """
+                SELECT *
+                FROM orders
+                WHERE id = ?
+                """,
+                (order_id,)
+            ).fetchone()
+
+            if not order or order["status"] != "pending":
+                conn.commit()
+                answer_callback(
+                    api,
+                    callback_id,
+                    "⚠️ این سفارش دیگه فعال نیست."
+                )
+                return True
+
+            if order["user_id"] == user_id:
+                conn.commit()
+                answer_callback(
+                    api,
+                    callback_id,
+                    "🚫 نمی‌تونی روی سفارش خودت کلیک کنی!"
+                )
+                return True
+
+            conn.execute(
+                """
+                INSERT INTO users (
+                    user_id, username, first_name
+                )
+                VALUES (?, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    username = excluded.username,
+                    first_name = excluded.first_name
+                """,
+                (
+                    user_id,
+                    user.get("username"),
+                    user.get("first_name")
+                )
+            )
+
+            inserted = conn.execute(
+                """
+                INSERT OR IGNORE INTO order_clicks (
+                    order_id, user_id
+                )
+                VALUES (?, ?)
+                """,
+                (order_id, user_id)
+            )
+
+            if inserted.rowcount == 0:
+                conn.commit()
+                answer_callback(
+                    api,
+                    callback_id,
+                    "⚠️ قبلاً پاداش این سفارش رو گرفتی!"
+                )
+                return True
+
+            conn.execute(
+                """
+                UPDATE users
+                SET coins = coins + 1
+                WHERE user_id = ?
+                """,
+                (user_id,)
+            )
+
+            new_count = order["counted_count"] + 1
+            target_count = order["target_count"]
+            completed = new_count >= target_count
+
+            new_status = "completed" if completed else "pending"
+
+            conn.execute(
+                """
+                UPDATE orders
+                SET counted_count = ?,
+                    status = ?
+                WHERE id = ?
+                """,
+                (new_count, new_status, order_id)
+            )
+
+            owner_id = order["user_id"]
+            channel_message_id = order["channel_message_id"]
+            info_message_id = order["info_message_id"]
+
+            conn.commit()
+
+        answer_callback(
+            api,
+            callback_id,
+            "🎉 یک سکه به حسابت اضافه شد!"
+        )
+
+        saved_messages = partner_publisher.get_order_messages(order_id)
+
+        if completed:
+            if saved_messages:
+                def delete_saved_message(saved):
+                    if saved.get("post_message_id"):
+                        api(
+                            "deleteMessage",
+                            {
+                                "chat_id": saved["channel_id"],
+                                "message_id": saved["post_message_id"]
+                            }
+                        )
+
+                    if saved.get("info_message_id"):
+                        api(
+                            "deleteMessage",
+                            {
+                                "chat_id": saved["channel_id"],
+                                "message_id": saved["info_message_id"]
+                            }
+                        )
+
+                _run_parallel_message_actions(
+                    saved_messages,
+                    delete_saved_message,
+                    "Views order delete error"
+                )
+
+                partner_publisher.delete_order_messages(order_id)
+
+            else:
+                if channel_message_id:
+                    api(
+                        "deleteMessage",
+                        {
+                            "chat_id": ORDER_CHANNEL,
+                            "message_id": channel_message_id
+                        }
+                    )
+
+                if info_message_id:
+                    api(
+                        "deleteMessage",
+                        {
+                            "chat_id": ORDER_CHANNEL,
+                            "message_id": info_message_id
+                        }
+                    )
+
+            send_message(
+                owner_id,
+                COMPLETED_ORDER_MESSAGE
+            )
+
+        else:
+            new_info_text = (
+                f"📋 **سفارش سین**\n\n"
+                f"👤 سین درخواستی: {target_count}\n"
+                f"👁️ سین خورده: {new_count}\n"
+                f"#{order_id}"
+            )
+
+            if saved_messages:
+                def edit_saved_message(saved):
+                    if not saved.get("info_message_id"):
+                        return None
+
+                    return api(
+                        "editMessageText",
+                        {
+                            "chat_id": saved["channel_id"],
+                            "message_id": saved["info_message_id"],
+                            "text": new_info_text,
+                            "reply_markup": order_keyboard(order_id)
+                        }
+                    )
+
+                _run_parallel_message_actions(
+                    saved_messages,
+                    edit_saved_message,
+                    "Views order edit error"
+                )
+
+            elif info_message_id:
+                api(
+                    "editMessageText",
+                    {
+                        "chat_id": ORDER_CHANNEL,
+                        "message_id": info_message_id,
+                        "text": new_info_text,
+                        "reply_markup": order_keyboard(order_id)
+                    }
+                )
+
+        return True
+
+    if data.startswith("report:"):
+        try:
+            order_id = int(data.split(":", 1)[1])
+        except (ValueError, IndexError):
+            answer_callback(api, callback_id, "❌ سفارش نامعتبره.")
+            return True
+
+        with get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+
+            order = conn.execute(
+                """
+                SELECT *
+                FROM orders
+                WHERE id = ?
+                """,
+                (order_id,)
+            ).fetchone()
+
+            if not order or order["status"] != "pending":
+                conn.commit()
+                answer_callback(
+                    api,
+                    callback_id,
+                    "⚠️ این سفارش دیگه فعال نیست."
+                )
+                return True
+
+            if order["user_id"] == user_id:
+                conn.commit()
+                answer_callback(
+                    api,
+                    callback_id,
+                    "🚫 نمی‌تونی سفارش خودت رو گزارش کنی!"
+                )
+                return True
+
+            existing_report = conn.execute(
+                """
+                SELECT id
+                FROM reports
+                WHERE order_id = ? AND reporter_id = ?
+                LIMIT 1
+                """,
+                (order_id, user_id)
+            ).fetchone()
+
+            if existing_report:
+                conn.commit()
+                answer_callback(
+                    api,
+                    callback_id,
+                    "⚠️ این سفارش رو قبلاً گزارش کردی."
+                )
+                return True
+
+            conn.execute(
+                """
+                INSERT INTO users (
+                    user_id, username, first_name
+                )
+                VALUES (?, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    username = excluded.username,
+                    first_name = excluded.first_name
+                """,
+                (
+                    user_id,
+                    user.get("username"),
+                    user.get("first_name")
+                )
+            )
+
+            buyer = conn.execute(
+                """
+                SELECT username, first_name
+                FROM users
+                WHERE user_id = ?
+                """,
+                (order["user_id"],)
+            ).fetchone()
+
+            conn.execute(
+                """
+                INSERT INTO reports (
+                    order_id, reporter_id, reason
+                )
+                VALUES (?, ?, ?)
+                """,
+                (order_id, user_id, "گزارش از کانال")
+            )
+
+            conn.commit()
+
+        answer_callback(
+            api,
+            callback_id,
+            "✅ گزارش برای ادمین ارسال شد."
+        )
+
+        if ADMIN_ID:
+            banner_message_id = order["channel_message_id"]
+
+            if banner_message_id:
+                banner_result = api(
+                    "forwardMessage",
+                    {
+                        "chat_id": ADMIN_ID,
+                        "from_chat_id": ORDER_CHANNEL,
+                        "message_id": banner_message_id
+                    }
+                )
+
+                if not banner_result.get("ok"):
+                    print(
+                        "Could not forward reported order banner:",
+                        banner_result
+                    )
+
+            buyer_id = order["user_id"]
+
+            buyer_username = (
+                f"@{buyer['username']}"
+                if buyer and buyer["username"]
+                else "ندارد"
+            )
+
+            buyer_name = (
+                buyer["first_name"]
+                if buyer and buyer["first_name"]
+                else "ثبت نشده"
+            )
+
+            report_text = (
+                "🚩 گزارش جدید سفارش سین\n\n"
+                f"📋 شماره سفارش: {order_id}\n"
+                f"👤 نام خریدار: {buyer_name}\n"
+                f"🔗 یوزرنیم خریدار: {buyer_username}\n"
+                f"🆔 آیدی عددی خریدار: {buyer_id}\n"
+                f"🧾 آیدی گزارش‌دهنده: {user_id}"
+            )
+
+            report_keyboard = {
+                "inline_keyboard": [[
+                    {
+                        "text": "🚫 بن کردن خریدار",
+                        "callback_data": (
+                            f"reportban:{buyer_id}:{order_id}"
+                        )
+                    },
+                    {
+                        "text": "✅ بررسی شد",
+                        "callback_data": f"reportdone:{order_id}"
+                    }
+                ]]
+            }
+
+            send_message(
+                ADMIN_ID,
+                report_text,
+                report_keyboard
+            )
+
+        return True
+
+    return False
