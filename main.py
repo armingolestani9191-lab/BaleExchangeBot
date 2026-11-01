@@ -1,3 +1,4 @@
+
 import time
 import threading
 import requests
@@ -16,6 +17,8 @@ from features import (
     partner_channels,
     partner_publisher,
 )
+
+from miniapp.api import run_server
 
 
 API_URL = f"https://tapi.bale.ai/bot{BOT_TOKEN}/"
@@ -127,10 +130,6 @@ def main_menu(user_id=None):
 
     # ==========================================
     # افزودن کانال
-    # وضعیت نمایش از پنل ادمین خوانده می‌شود.
-    #
-    # این فقط نمایش دکمه را کنترل می‌کند
-    # و منطق خود افزودن کانال را تغییر نمی‌دهد.
     # ==========================================
 
     if admin_panel.is_add_channel_visible():
@@ -292,7 +291,6 @@ def handle_message(message):
 
     # ==========================================
     # بکاپ دیتابیس
-    # فقط ادمین و فقط در گفت‌وگوی خصوصی
     # ==========================================
 
     if backup.handle_message(message, send_message):
@@ -692,10 +690,6 @@ def handle_callback(callback):
     if not admin_panel.is_admin(user_id):
 
         if chat_type == "channel":
-            # مهم:
-            # در کانال هیچ پیام جوین اجباری ارسال نمی‌کنیم.
-            # فقط عضویت را بررسی می‌کنیم.
-
             missing = force_join.missing_channels(
                 api,
                 user_id
@@ -711,8 +705,6 @@ def handle_callback(callback):
                 return
 
         else:
-            # پیام راهنمای جوین فقط در پیوی ربات نمایش داده می‌شود.
-
             if not force_join.check_access(
                 user_id,
                 chat_id,
@@ -805,6 +797,34 @@ def start_guaranteed_membership_monitor():
     )
 
     worker.start()
+
+
+# ==========================================
+# MINI APP SERVER
+# اجرای سرور مینی اپ در Thread جداگانه
+# ==========================================
+
+def start_miniapp_server():
+
+    def server_worker():
+        try:
+            run_server()
+
+        except Exception as error:
+            print(
+                "Mini App server error:",
+                repr(error)
+            )
+
+    worker = threading.Thread(
+        target=server_worker,
+        name="miniapp-api-server",
+        daemon=True
+    )
+
+    worker.start()
+
+    print("Mini App server thread started.")
 
 
 # ==========================================
@@ -927,6 +947,12 @@ def main():
     # ==========================================
 
     refresh_old_bot_links()
+
+    # ==========================================
+    # اجرای Mini App
+    # ==========================================
+
+    start_miniapp_server()
 
     # ==========================================
     # مانیتور ممبر تضمینی
