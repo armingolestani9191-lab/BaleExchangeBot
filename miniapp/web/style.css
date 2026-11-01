@@ -1,0 +1,495 @@
+
+/* ==========================================
+   BALE EXCHANGE MINI APP
+   طراحی اختصاصی بر اساس تصویر مرجع
+========================================== */
+
+:root {
+    --background: #f5f7ff;
+    --surface: #ffffff;
+    --primary: #2165ed;
+    --primary-dark: #1554d5;
+    --text: #101a38;
+    --muted: #8992a5;
+    --green: #16ad88;
+    --orange: #e45b19;
+    --border: #edf0f8;
+    --shadow: 0 12px 35px rgba(42, 75, 150, 0.08);
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: Tahoma, Arial, sans-serif;
+    background:
+        radial-gradient(ellipse at 100% 12%, #dce6ff 0%, transparent 35%),
+        radial-gradient(ellipse at 0% 45%, #eef2ff 0%, transparent 35%),
+        var(--background);
+    color: var(--text);
+    direction: rtl;
+    min-height: 100vh;
+}
+
+button {
+    font-family: inherit;
+    cursor: pointer;
+    border: none;
+    outline: none;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.app {
+    width: 100%;
+    max-width: 520px;
+    min-height: 100vh;
+    margin: 0 auto;
+    padding: 25px 24px 125px;
+    position: relative;
+}
+
+/* ==========================================
+   HEADER
+========================================== */
+
+.header {
+    height: 55px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 45px;
+}
+
+.brand {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    font-size: 20px;
+    font-weight: 900;
+    color: #101426;
+}
+
+.brand-gem {
+    font-size: 29px;
+}
+
+.header-icon {
+    width: 35px;
+    height: 40px;
+    background: transparent;
+    color: #111a35;
+    font-size: 35px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.menu-button {
+    font-size: 31px;
+}
+
+/* ==========================================
+   MAIN CONTENT
+========================================== */
+
+.main-content {
+    width: 100%;
+}
+
+/* ==========================================
+   CHANNEL CARD
+========================================== */
+
+.channel-card {
+    position: relative;
+    margin-top: 85px;
+    padding: 125px 22px 25px;
+    background: rgba(255, 255, 255, 0.94);
+    border-radius: 32px;
+    box-shadow: 0 15px 45px rgba(54, 85, 160, 0.07);
+    text-align: center;
+}
+
+.channel-avatar-wrapper {
+    position: absolute;
+    top: -75px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 150px;
+    height: 150px;
+    border-radius: 50%;
+    padding: 9px;
+    background: white;
+    box-shadow: 0 8px 25px rgba(30, 65, 140, 0.10);
+}
+
+.channel-avatar {
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(145deg, #101a37, #050914);
+    color: white;
+    font-size: 43px;
+    font-weight: bold;
+    overflow: hidden;
+}
+
+.verified-icon {
+    position: absolute;
+    bottom: 7px;
+    right: 0;
+    width: 39px;
+    height: 39px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--primary);
+    color: white;
+    border: 4px solid white;
+    border-radius: 50%;
+    font-size: 20px;
+    font-weight: bold;
+}
+
+.channel-details {
+    width: 100%;
+}
+
+.channel-details h1 {
+    font-size: 23px;
+    line-height: 1.8;
+    font-weight: 900;
+    color: #101010;
+    overflow-wrap: anywhere;
+}
+
+.channel-details span {
+    display: block;
+    direction: ltr;
+    color: var(--muted);
+    font-size: 13px;
+    margin-top: 7px;
+}
+
+.channel-description {
+    margin-top: 13px;
+    color: #858da0;
+    font-size: 14px;
+    line-height: 2;
+}
+
+/* ==========================================
+   ORDER SUMMARY
+========================================== */
+
+.order-summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-around;
+    gap: 10px;
+    margin-top: 27px;
+    padding: 22px 10px;
+    border-radius: 25px;
+    background: linear-gradient(110deg, #f0f3ff, #f1f8f8);
+}
+
+.summary-item {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 9px;
+    min-width: 0;
+}
+
+.summary-icon {
+    font-size: 29px;
+}
+
+.summary-item div {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.summary-item strong {
+    font-size: 17px;
+    font-weight: 900;
+}
+
+.summary-item small {
+    color: var(--muted);
+    font-size: 10px;
+}
+
+.reward-summary strong {
+    color: var(--primary);
+}
+
+.type-summary strong {
+    color: var(--green);
+}
+
+.summary-divider {
+    width: 2px;
+    height: 43px;
+    background: #dce1ee;
+}
+
+/* ==========================================
+   ORDER DETAILS
+========================================== */
+
+.details-section {
+    margin-top: 36px;
+}
+
+.section-heading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 13px;
+    margin-bottom: 18px;
+}
+
+.section-heading h2 {
+    font-size: 19px;
+    font-weight: 900;
+    color: #101a38;
+}
+
+.info-icon {
+    font-size: 24px;
+    color: #8992a5;
+}
+
+.detail-row {
+    min-height: 78px;
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    padding: 17px 22px;
+    background: white;
+    border-radius: 25px;
+    box-shadow: var(--shadow);
+    font-size: 16px;
+    font-weight: bold;
+}
+
+.detail-check {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    background: var(--primary);
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 19px;
+    flex-shrink: 0;
+}
+
+.telegram-icon {
+    color: var(--primary);
+    font-size: 25px;
+    margin-right: auto;
+}
+
+/* ==========================================
+   GUARANTEE WARNING
+========================================== */
+
+.guarantee-warning {
+    padding: 20px;
+    margin-top: 28px;
+    border: 2px solid #ffc38e;
+    border-radius: 27px;
+    background: linear-gradient(120deg, #fff0e4, #fff8f1);
+}
+
+.guarantee-warning[hidden] {
+    display: none;
+}
+
+.warning-heading {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    color: var(--orange);
+    font-size: 17px;
+    margin-bottom: 13px;
+}
+
+.warning-icon {
+    font-size: 29px;
+    color: #f59b00;
+}
+
+.guarantee-warning p {
+    color: #17213d;
+    font-size: 14px;
+    line-height: 2.2;
+    font-weight: bold;
+}
+
+/* ==========================================
+   MAIN ACTION
+========================================== */
+
+.main-action {
+    margin-top: 32px;
+}
+
+.join-button {
+    width: 100%;
+    min-height: 75px;
+    border-radius: 50px;
+    background: linear-gradient(110deg, #2877fa, #165be8);
+    color: white;
+    font-size: 21px;
+    font-weight: 900;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 13px;
+    box-shadow: 0 13px 28px rgba(33, 101, 237, 0.20);
+    transition: 0.2s ease;
+}
+
+.join-button:active {
+    transform: scale(0.98);
+    background: var(--primary-dark);
+}
+
+.check-button {
+    width: 100%;
+    min-height: 48px;
+    margin-top: 12px;
+    border-radius: 15px;
+    background: #eaf0ff;
+    color: var(--primary);
+    font-size: 14px;
+    font-weight: bold;
+}
+
+.check-button:active {
+    background: #dce7ff;
+}
+
+.status-text {
+    margin-top: 17px;
+    text-align: center;
+    font-size: 12px;
+    color: var(--muted);
+}
+
+/* ==========================================
+   BOTTOM NAVIGATION
+========================================== */
+
+.bottom-nav {
+    position: fixed;
+    bottom: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 100%;
+    max-width: 520px;
+    min-height: 92px;
+    display: flex;
+    align-items: center;
+    justify-content: space-around;
+    padding: 12px 8px calc(12px + env(safe-area-inset-bottom));
+    background: rgba(255, 255, 255, 0.97);
+    border-top: 1px solid #e9edf5;
+    box-shadow: 0 -8px 25px rgba(40, 60, 100, 0.035);
+    z-index: 20;
+}
+
+.nav-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    min-width: 65px;
+    background: transparent;
+    color: #9299a9;
+    transition: 0.2s ease;
+}
+
+.nav-icon {
+    font-size: 27px;
+    line-height: 1;
+}
+
+.nav-item small {
+    font-size: 11px;
+    font-weight: bold;
+}
+
+.nav-item.active {
+    color: var(--primary);
+}
+
+/* ==========================================
+   RESPONSIVE
+========================================== */
+
+@media (max-width: 390px) {
+    .app {
+        padding-right: 17px;
+        padding-left: 17px;
+    }
+
+    .channel-card {
+        padding-right: 15px;
+        padding-left: 15px;
+    }
+
+    .channel-details h1 {
+        font-size: 20px;
+    }
+
+    .summary-item {
+        gap: 5px;
+    }
+
+    .summary-item strong {
+        font-size: 14px;
+    }
+
+    .summary-icon {
+        font-size: 23px;
+    }
+
+    .join-button {
+        min-height: 65px;
+        font-size: 18px;
+    }
+}
+
+@media (max-width: 340px) {
+    .brand {
+        font-size: 16px;
+    }
+
+    .channel-avatar-wrapper {
+        width: 130px;
+        height: 130px;
+        top: -65px;
+    }
+
+    .channel-card {
+        padding-top: 105px;
+    }
+
+    .summary-item small {
+        font-size: 9px;
+    }
+}
